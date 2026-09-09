@@ -1,0 +1,16 @@
+{
+  "contract": {
+    "purpose": "让林渡接下无主邮袋",
+    "pov_entity_id": "lin-du",
+    "forbidden_phrases": ["命运的齿轮"]
+  },
+  "canon_facts": [
+    {"id": "fact-age", "subject_entity_id": "lin-du", "predicate": "age", "value": 24, "status": "confirmed"}
+  ],
+  "entities": [
+    {"id": "qin-po", "name": "秦婆", "state": {"alive": false}}
+  ],
+  "plot_threads": [
+    {"id": "bell-crack", "kind": "foreshadowing", "title": "钟楼裂纹", "status": "planted", "due_order": 3}
+  ]
+}

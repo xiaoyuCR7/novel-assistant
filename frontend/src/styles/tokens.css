@@ -1,0 +1,43 @@
+:root {
+  --ink-950: #1d1d1f;
+  --ink-900: #29292c;
+  --ink-800: #424245;
+  --mist-500: #548c89;
+  --mist-300: #c8d9d7;
+  --paper-50: #ffffff;
+  --paper-100: #f5f5f7;
+  --graphite-900: #1d1d1f;
+  --graphite-600: #6e6e73;
+  --annotation-600: #0071e3;
+  --gold-500: #c99944;
+  --accent: #0071e3;
+  --accent-text: #0071e3;
+  --accent-soft: #e8f1fc;
+  --surface-sidebar: #f5f5f7;
+  --surface-hover: #eaeaed;
+  --text-secondary: #6e6e73;
+  --text-tertiary: #6e6e73;
+  --warning: #ff9f0a;
+  --danger: #ff453a;
+  --line-light: rgba(60, 60, 67, 0.12);
+  --glass: rgba(248, 248, 250, 0.72);
+  --shadow-stage: 0 6px 24px rgba(45, 53, 67, 0.05);
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-manuscript: "New York", "Songti SC", "Noto Serif SC", "SimSun", serif;
+  --header-height: 72px;
+  --radius-panel: 16px;
+  --radius-control: 10px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --control-border: #d2d2d7;
+  --error-text: #b42318;
+  --error-surface: #fff4f2;
+  --success-text: #287346;
+  --focus-ring: 0 0 0 3px rgb(0 113 227 / 18%);
+}

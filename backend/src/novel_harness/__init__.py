@@ -1,0 +1,1 @@
+"""Novel Agent Harness backend."""

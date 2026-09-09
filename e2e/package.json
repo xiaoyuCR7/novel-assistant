@@ -1,0 +1,13 @@
+{
+  "name": "novel-agent-harness-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "pretest": "node --test unit/global-teardown.test.mjs",
+    "test": "node run-playwright.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}
