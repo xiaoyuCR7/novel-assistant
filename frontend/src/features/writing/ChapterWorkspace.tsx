@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { ChapterDocument } from "../../lib/types";
+import { useLocalDraft } from '../../lib/draftStore';
+import { DraftRecoveryNotice } from '../../components/LocalDraftRecovery';
+import { DiagnosticError } from '../../components/DiagnosticError';
 
 function contractLines(value: unknown): string {
   return Array.isArray(value) ? value.map(String).join("\n") : String(value ?? "");
@@ -11,6 +14,8 @@ function normalizedForbidden(value: unknown): string[] {
 }
 
 interface ChapterWorkspaceProps {
+  projectId?: string;
+  chapterId?: string;
   title: string;
   document: ChapterDocument;
   saving: boolean;
@@ -31,6 +36,8 @@ interface ChapterWorkspaceProps {
 }
 
 export function ChapterWorkspace({
+  projectId,
+  chapterId,
   title,
   document,
   saving,
@@ -41,7 +48,7 @@ export function ChapterWorkspace({
   onDraftChange,
   replacement,
 }: ChapterWorkspaceProps) {
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>(null);
   const [completing, setCompleting] = useState(false);
   const [baseline, setBaseline] = useState(document);
   const [content, setContent] = useState(document.content);
@@ -58,6 +65,8 @@ export function ChapterWorkspace({
     content !== baseline.content ||
     purpose !== String(baseline.contract.purpose ?? "") ||
     forbiddenValue !== JSON.stringify(normalizedForbidden(baseline.contract.forbidden_revelations));
+  const recovery = useLocalDraft({ projectId: chapterId ? projectId : undefined, chapterId: chapterId ?? null,
+    kind: 'chapter', title, baseRevision: baseline.revision, values: { content, purpose, forbidden }, dirty });
   useEffect(() => {
     if (replacement && replacement !== appliedReplacement.current) {
       appliedReplacement.current = replacement;
@@ -112,7 +121,7 @@ export function ChapterWorkspace({
       });
       if (saved) setBaseline(saved);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(e);
     } finally {
       savePending.current = false;
       setCompleting(false);
@@ -131,6 +140,13 @@ export function ChapterWorkspace({
           <small>字</small>
         </div>
       </header>
+      <DraftRecoveryNotice drafts={recovery.candidates} status={recovery.status} onDiscard={recovery.discard}
+        onRestore={saved => {
+          if (dirty && !window.confirm('当前还有未保存修改。用这份恢复稿替换编辑器内容？当前草稿仍保留在本机恢复箱。')) return;
+          recovery.adopt(saved);
+          setContent(String(saved.values.content)); setPurpose(String(saved.values.purpose)); setForbidden(String(saved.values.forbidden));
+          setBaseline({ ...document, revision: saved.baseRevision ?? undefined });
+        }} />
       <div className="contract-strip">
         <label>
           本章目的
@@ -186,14 +202,10 @@ export function ChapterWorkspace({
       {dirty && document.revision !== undefined && baseline.revision !== undefined &&
         document.revision > baseline.revision && (
         <p className="error-note" role="alert">
-          其他窗口已更新本章。你的草稿已保留，请复制后重新加载，避免覆盖。
+          草稿基于修订 {baseline.revision}，当前修订 {document.revision}。其他窗口已更新本章。你的草稿已保留，请复制后重新加载，避免覆盖。
         </p>
       )}
-      {error && (
-        <p role="alert" className="error-note">
-          {error}
-        </p>
-      )}
+      {!!error && <DiagnosticError error={error} />}
       <footer className="editor-footer">
         <span>
           {dirty

@@ -49,6 +49,8 @@ def preflight(session, payload: AIJobCreate, limits: ExecutionLimits) -> TaskBud
             "token_budget": payload.token_budget,
             "execution_limits": limits.model_dump(),
             "fragments": [asdict(fragment) for fragment in hard],
+            # New tasks include the continuation policy even with no history yet.
+            "conversation": {"version": 1},
         },
     )
     effective = min(payload.token_budget, limits.context_capacity - limits.output_token_budget)

@@ -92,6 +92,9 @@ def export_project(session: Session, project_id: str, data_dir: Path) -> bytes:
             entries, files = _capture_export_inputs(session, project_id, data_dir, Path(staging))
         finally:
             session.rollback()
+        from novel_harness.services.backup_restore import backup_manifest
+
+        entries["backup-manifest.json"] = backup_manifest(project_id, entries, files)
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for name, content in entries.items():
@@ -200,11 +203,17 @@ def _capture_export_inputs(session: Session, project_id: str, data_dir: Path, st
         )
     files = []
     for position, asset in enumerate(assets):
+        if not asset.relative_path and asset.status != "ready":
+            continue
         source = (data_dir / asset.relative_path).resolve()
-        if source.is_relative_to((data_dir / "assets").resolve()) and source.is_file():
-            staged = staging / str(position)
-            shutil.copyfile(source, staged)
-            files.append((staged, f"assets/{Path(asset.relative_path).name}"))
+        if not source.is_relative_to((data_dir / "assets").resolve()) or not source.is_file():
+            raise HTTPException(422, detail={
+                "code": "BACKUP_ASSET_MISSING",
+                "message": "素材文件缺失或路径无效，无法生成完整备份。",
+            })
+        staged = staging / str(position)
+        shutil.copyfile(source, staged)
+        files.append((staged, source.relative_to(data_dir.resolve()).as_posix()))
     archive_names = {name.casefold() for name in entries}
     for position, source_document in enumerate(import_sources):
         source, archive_name = _validated_import_source(data_dir, source_document.stored_path)

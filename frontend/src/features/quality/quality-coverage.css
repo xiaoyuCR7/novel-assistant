@@ -1,0 +1,23 @@
+.quality-coverage { display: grid; gap: 20px; min-width: 0; color: #1d1d1f; }
+.quality-coverage h2 { margin: 0 0 8px; font-size: 24px; letter-spacing: -.025em; }
+.quality-coverage p { margin: 0; font-size: 14px; line-height: 1.65; color: #6e6e73; overflow-wrap: anywhere; }
+.quality-coverage .coverage-note { padding: 14px 16px; border-radius: 12px; background: #f5f5f7; }
+.coverage-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 0; padding-block: 4px; }
+.coverage-counts dt { font-size: 13px; color: #6e6e73; }
+.coverage-counts dd { margin: 6px 0 0; font-size: 26px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.coverage-controls { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.coverage-controls label { display: grid; gap: 8px; font-size: 14px; min-width: 180px; }
+.quality-coverage button, .quality-coverage select { min-height: 44px; }
+.coverage-chapters { margin: 0; padding: 0; list-style: none; }
+.coverage-chapters li { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding-block: 20px; border-bottom: 1px solid #e5e5ea; }
+.coverage-description { min-width: 0; display: grid; gap: 7px; }
+.coverage-title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.coverage-title h3 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+.coverage-status { padding: 3px 8px; border: 1px solid #e5e5ea; border-radius: 6px; white-space: nowrap; font-size: 12px; }
+.coverage-description small { font-size: 12px; color: #6e6e73; }
+.coverage-actions { display: flex; flex-shrink: 0; gap: 8px; flex-wrap: wrap; }
+.coverage-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; }
+@media (max-width: 680px) {
+  .coverage-chapters li { align-items: flex-start; flex-direction: column; gap: 14px; }
+  .coverage-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

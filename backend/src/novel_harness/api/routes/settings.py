@@ -1,6 +1,6 @@
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from novel_harness.ai.base import (
     PROVIDER_FAILURE_MESSAGES,
@@ -8,7 +8,17 @@ from novel_harness.ai.base import (
     ExecutionLimits,
     ProviderError,
 )
-from novel_harness.services.model_settings import ModelConfigInput, selected_provider
+from novel_harness.services.model_profiles import (
+    ApplyProfile,
+    CreateProfile,
+    ModelProfiles,
+    RenameProfile,
+)
+from novel_harness.services.model_settings import (
+    ModelConfigChanged,
+    ModelConfigInput,
+    selected_provider,
+)
 
 
 def same_origin(request: Request):
@@ -54,12 +64,56 @@ def get_model(request: Request):
 def put_model(payload: ModelConfigInput, request: Request):
     try:
         return request.app.state.model_settings.save(payload)
+    except ModelConfigChanged as exc:
+        raise HTTPException(
+            409, detail={'code': 'MODEL_CONFIG_CHANGED', 'message': str(exc)}
+        ) from None
     except (ValueError, ProviderError) as exc:
         raise HTTPException(422, detail={"message": str(exc)}) from None
     except OSError:
         raise HTTPException(
             503, detail={"message": "无法保存模型配置，请检查本地目录权限。"}
         ) from None
+
+
+def profile_action(request, action):
+    try:
+        return action(ModelProfiles(request.app.state.model_settings))
+    except ModelConfigChanged as exc:
+        raise HTTPException(
+            409, detail={'code': 'MODEL_CONFIG_CHANGED', 'message': str(exc)}
+        ) from None
+    except (ValueError, ProviderError):
+        raise HTTPException(422, detail={'code': 'MODEL_PROFILE_INVALID',
+            'message': '模型方案配置不可用，请检查当前模型参数后重新保存方案。'}) from None
+    except OSError:
+        raise HTTPException(503, detail={'code': 'MODEL_PROFILE_WRITE_FAILED',
+            'message': '无法保存模型方案，请检查本机目录权限后重试。'}) from None
+
+
+@router.get('/profiles')
+def list_profiles(request: Request):
+    return profile_action(request, lambda profiles: profiles.list())
+
+
+@router.post('/profiles', status_code=201)
+def create_profile(payload: CreateProfile, request: Request):
+    return profile_action(request, lambda profiles: profiles.create(payload))
+
+
+@router.patch('/profiles/{profile_id}')
+def rename_profile(profile_id: str, payload: RenameProfile, request: Request):
+    return profile_action(request, lambda profiles: profiles.rename(profile_id, payload))
+
+
+@router.delete('/profiles/{profile_id}')
+def delete_profile(profile_id: str, request: Request, expected_revision: int = Query(ge=1)):
+    return profile_action(request, lambda profiles: profiles.delete(profile_id, expected_revision))
+
+
+@router.post('/profiles/{profile_id}/apply')
+def apply_profile(profile_id: str, payload: ApplyProfile, request: Request):
+    return profile_action(request, lambda profiles: profiles.apply(profile_id, payload))
 
 
 @router.post("/test")

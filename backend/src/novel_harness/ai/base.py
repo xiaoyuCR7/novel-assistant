@@ -56,6 +56,8 @@ class ContextBudgetError(ProviderError):
 
 
 PROVIDER_FAILURE_MESSAGES = {
+    "SPENDING_PRICE_REQUIRED": "请在费用中心设置模型单价，并核对未定价记录后继续。",
+    "SPENDING_LIMIT_REACHED": "本次请求预计超过本地费用限额，请在费用中心查看记录或调整预算。",
     "PROVIDER_AUTH_FAILED": "API 认证失败，请检查密钥和访问权限后手动恢复。",
     "PROVIDER_BALANCE_INSUFFICIENT": "API 账户余额不足，请充值或调整模型设置后继续。",
     "PROVIDER_RATE_LIMITED": "API 服务商限流，请稍后手动恢复；未自动重发。",

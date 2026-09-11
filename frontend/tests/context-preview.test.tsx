@@ -5,6 +5,26 @@ import { ContextPreview } from "../src/features/ai/ContextPreview";
 import { ChatWorkspace } from "../src/features/ai/ChatWorkspace";
 
 describe("context preview truncation", () => {
+  it("distinguishes compressed memory from deleted history and shows frozen model limits", () => {
+    render(<ContextPreview context={{
+      execution_limits: { context_capacity: 32768, output_token_budget: 4096 },
+      conversation: { version: 1, mode: 'compressed', total_turns: 12,
+        compressed_turns: 9, recent_turns: 3, reused_from_job_id: 'previous-job' },
+    }} />);
+    expect(screen.getByRole('status')).toHaveTextContent('较早 9 轮已压缩，最近 3 轮完整保留');
+    expect(screen.getByRole('status')).toHaveTextContent('原始历史记录仍完整保存');
+    expect(screen.getByRole('status')).toHaveTextContent('已复用保存的压缩记忆');
+    expect(screen.getByText(/本次模型窗口 32768 Token，预留输出 4096 Token/)).toBeInTheDocument();
+    expect(screen.queryByText('上下文已截断')).not.toBeInTheDocument();
+  });
+
+  it("shows the number of intact turns when no compaction is needed", () => {
+    render(<ContextPreview context={{
+      conversation: { version: 1, mode: 'full', total_turns: 15, recent_turns: 15, compressed_turns: 0 },
+    }} />);
+    expect(screen.getByRole('status')).toHaveTextContent('本次承接 15 轮完整对话，无需压缩');
+  });
+
   it("shows top-level omitted source ids and the total omitted count", () => {
     render(
       <ContextPreview

@@ -20,6 +20,9 @@ router = APIRouter(prefix="/projects/{project_id}/ai/jobs", tags=["ai"])
 
 
 def preparation(request, session, command):
+    if command["chapter_id"]:
+        from novel_harness.services.quality import assert_quality_available
+        assert_quality_available(session, command["project_id"], command["chapter_id"])
     source = capture_source(session, command["project_id"], command["chapter_id"])
     if source["revision"] != command["expected_revision"]:
         raise HTTPException(409, detail={"code": "SOURCE_CHANGED"})
@@ -49,9 +52,12 @@ def resume_validation(request, session, control):
                 },
             )
     job = session.get(AIJob, control.job_id)
-    if job and job.task_type == 'wiki_summary':
-        from novel_harness.services.wiki_generation import assert_wiki_source
+    if job and job.task_type == "quality_workflow":
+        from novel_harness.services.quality import validate_quality_resume
+        validate_quality_resume(session, control)
+    elif job and job.task_type == 'wiki_summary':
         from novel_harness.services import wiki
+        from novel_harness.services.wiki_generation import assert_wiki_source
         assert_wiki_source(session, control.source_snapshot)
         active = wiki.active_job(session, job.project_id, job.instructions, job.id)
         if active:
@@ -62,6 +68,9 @@ def resume_validation(request, session, control):
 
         assert_preparation_source(session, control.source_snapshot)
     else:
+        if job and job.chapter_id:
+            from novel_harness.services.quality import assert_quality_available
+            assert_quality_available(session, job.project_id, job.chapter_id)
         assert_source(session, control.source_snapshot)
     if request.app.state.model_settings.identity() != control.provider_identity:
         raise HTTPException(409, detail={"code": "PROVIDER_CHANGED"})
@@ -72,6 +81,7 @@ def list_jobs(
     project_id: str,
     request: Request,
     chapter_id: str | None = None,
+    conversation_id: str | None = Query(default=None, max_length=64),
     kind: Literal["writing", "summary"] = "writing",
     active_only: bool = False,
     session: Session = Depends(get_job_session, scope="function"),
@@ -85,9 +95,17 @@ def list_jobs(
         AIJob.task_type == "chapter_summary"
         if kind == "summary"
         else AIJob.task_type.not_in(
-            {"chapter_summary", "preparation_analysis", "preparation_followup", "wiki_summary"}
+            {
+                "chapter_summary", "preparation_analysis", "preparation_followup",
+                "wiki_summary", "quality_workflow",
+            }
         ),
     ]
+    if kind == "writing":
+        from novel_harness.services import conversation_threads as threads
+        thread = threads.resolve(session, project_id, conversation_id,
+                                 chapter_id=chapter_id, check_scope=True)
+        scope.append(threads.history_filter(session, thread))
     active = AIJob.status.in_(ACTIVE | {"recovery_required"})
     recent = select(AIJob.id).where(*scope).order_by(AIJob.created_at.desc()).limit(100)
     statement = select(AIJob).where(
@@ -102,6 +120,7 @@ def list_jobs(
 def job_page(
     project_id: str,
     chapter_id: str | None = None,
+    conversation_id: str | None = Query(default=None, max_length=64),
     kind: Literal["writing", "summary"] = "writing",
     active_only: bool = False,
     limit: int = Query(default=50, ge=1, le=100),
@@ -112,7 +131,8 @@ def job_page(
 
     if chapter_id:
         require_chapter(session, chapter_id)
-    return read_page(session, project_id, chapter_id, kind, active_only, limit, before)
+    return read_page(session, project_id, chapter_id, kind, active_only, limit, before,
+                     conversation_id=conversation_id)
 
 
 @router.post("", status_code=202)
@@ -149,12 +169,29 @@ def preflight_job(
 
     verify_project_payload(project_id, payload.project_id)
     limits = ExecutionLimits.model_validate(request.app.state.model_settings.identity())
+    from novel_harness.services.conversation_threads import assert_writable
+    assert_writable(session, project_id, payload.chapter_id, payload.conversation_id)
     return preflight(session, payload, limits)
 
 
 @router.get("/{job_id}")
-def get_job(project_id: str, job_id: str, request: Request):
-    return get_job_store(project_id, request).read(job_id)
+def get_job(project_id: str, job_id: str, request: Request,
+            conversation_id: str | None = Query(default=None, max_length=64)):
+    store = get_job_store(project_id, request)
+    if conversation_id is None:
+        return store.read(job_id)
+    from novel_harness.services import conversation_threads as threads
+    with store.database.job_session_scope() as session:
+        thread = threads.resolve(session, project_id, conversation_id)
+        if not session.scalar(select(AIJob.id).where(
+            AIJob.id == job_id, threads.history_filter(session, thread),
+        )):
+            raise HTTPException(404, detail={"code": "JOB_NOT_FOUND"})
+        result = store.serialize_in_session(session, job_id)
+        result["inherited"] = result["conversation_id"] != thread.id
+        if result["inherited"]:
+            result["allowed_actions"] = []
+        return result
 
 
 @router.post("/{job_id}/cancel")

@@ -8,6 +8,8 @@ PROMPT_VERSION = WRITING_PROMPT_VERSION
 
 
 def prompt_version_for(task_type: str) -> str:
+    if task_type == "quality_workflow":
+        return "chapter-quality-v1"
     if task_type == 'wiki_summary':
         return 'novel-wiki-v1'
     if task_type == "chapter_summary":

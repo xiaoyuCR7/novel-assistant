@@ -47,7 +47,7 @@ from novel_harness.db.models import (
     TimelineEvent,
 )
 from novel_harness.schemas.stages import PlanOutput, ResolutionOutput, ReviewOutput
-from novel_harness.services.context import ContextAssembler, ContextFragment
+from novel_harness.services.context import ContextAssembler
 from novel_harness.services.continuity import ContinuityChecker, ContinuityInput
 from novel_harness.services.entity_states import (
     assert_project_entity_states_resolved,
@@ -106,6 +106,7 @@ class CreationPipeline:
 
     def run_durable(self, store, fence, provider_factory, *, vectors=None, validate_provider=None):
         from novel_harness.db.job_models import AIJobControl
+        from novel_harness.services.conversation import capture_history, prepare_conversation
         from novel_harness.services.job_context import assert_source, capture_manifest
         from novel_harness.services.job_stages import StageRunner
 
@@ -163,7 +164,18 @@ class CreationPipeline:
             snapshot = deepcopy(job.context_snapshot)
             if ready and snapshot.get("format_version") != 2:
                 raise HTTPException(409, detail={"code": "CHECKPOINT_INCOMPATIBLE"})
-            if not ready:
+        if not ready and "conversation" not in snapshot:
+            # Freeze scope/order/content before retrieval or compression can send
+            # a paid request. A restart must not recollect newly arriving turns.
+            with store.write() as session:
+                current, control = store.assert_running(session, fence)
+                assert_source(session, source)
+                snapshot = {"conversation": capture_history(
+                    session, current, source, control.provider_identity,
+                )}
+                current.context_snapshot = deepcopy(snapshot)
+        if not ready and "fragments" not in snapshot:
+            with store.database.job_session_scope() as session:
                 if vectors:
                     session.info["vectors"] = vectors(self.stage_runner)
                     session.info["durable_retrieval"] = True
@@ -177,6 +189,7 @@ class CreationPipeline:
                         job.task_type,
                         job.instructions,
                         source["revision"],
+                        conversation_state=snapshot["conversation"],
                     )
                     capture_manifest(session, source, snapshot)
                 except HTTPException as exc:
@@ -200,6 +213,12 @@ class CreationPipeline:
                 assert_source(session, source)
                 persisted.context_snapshot = deepcopy(snapshot)
                 control.source_snapshot = source
+            snapshot = prepare_conversation(self, store, fence, job, source, snapshot)
+            guard()
+            with store.write() as session:
+                persisted, control = store.assert_running(session, fence)
+                assert_source(session, source)
+                persisted.context_snapshot = deepcopy(snapshot)
                 control.context_ready = True
         contract = source["contract"]
         started = monotonic()
@@ -390,82 +409,14 @@ class CreationPipeline:
         task_type,
         instructions,
         source_revision,
+        *,
+        conversation_state=None,
     ):
         if chapter_id:
             assert_project_entity_states_resolved(session, project.id, chapter_id)
         packet = self._context_packet(
             session, project, chapter_id, contract, token_budget, task_type, instructions
         )
-        history = session.scalars(
-            select(AIJob)
-            .where(
-                AIJob.project_id == project.id,
-                AIJob.task_type.not_in({"chapter_summary", "wiki_summary"}),
-                AIJob.chapter_id == chapter_id,
-                AIJob.status == "succeeded",
-            )
-            .order_by(AIJob.created_at.desc(), AIJob.id.desc())
-            .limit(8)
-        ).all()
-        remaining = 6000
-        turns = []
-        document = get_or_create_document(session, chapter_id) if chapter_id else None
-        for prior in history:
-            reply = (
-                prior.result.get("reply")
-                or prior.result.get("candidate_text")
-                or json.dumps(prior.result.get("output", {}), ensure_ascii=False)
-            )
-            candidate = prior.result.get("candidate_text")
-            status = "discussion"
-            if candidate:
-                if prior.accepted_version_id:
-                    is_current = bool(
-                        document
-                        and document.current_version_id == prior.accepted_version_id
-                        and document.content == candidate
-                    )
-                    status = "accepted_current" if is_current else "accepted_superseded"
-                    if is_current:
-                        reply = (
-                            "正文已在当前版本提供，此处不重复；引用版本 "
-                            + prior.accepted_version_id
-                        )
-                else:
-                    status = (
-                        "unaccepted_candidate"
-                        if source_revision == prior.result.get("source_revision")
-                        else "unaccepted_superseded"
-                    )
-            turn = {
-                "author": prior.instructions[:2000],
-                "assistant": str(reply)[-3000:],
-                "status": status,
-                "accepted_version_id": prior.accepted_version_id,
-                "source_revision": prior.result.get("source_revision"),
-            }
-            length = len(turn["author"]) + len(turn["assistant"])
-            if length > remaining:
-                break
-            remaining -= length
-            turns.append(turn)
-        initially_dropped = packet.dropped_source_ids
-        if turns:
-            packet = self.context_assembler.pack(
-                task_type,
-                [f for f in packet.fragments if f.hard],
-                [f for f in packet.fragments if not f.hard]
-                + [
-                    ContextFragment(
-                        "conversation",
-                        chapter_id or project.id,
-                        "同一创作范围内的最近对话（非确认事实）",
-                        96,
-                        json.dumps(list(reversed(turns)), ensure_ascii=False),
-                    )
-                ],
-                token_budget,
-            )
         snapshot = {
             "format_version": 2,
             "execution_limits": getattr(self, "execution_limits", ExecutionLimits().model_dump()),
@@ -474,12 +425,16 @@ class CreationPipeline:
             "token_budget": packet.token_budget,
             "total_estimated_tokens": packet.total_estimated_tokens,
             "over_budget": packet.over_budget,
-            "dropped_source_ids": list(
-                dict.fromkeys(initially_dropped + packet.dropped_source_ids)
-            ),
+            "dropped_source_ids": packet.dropped_source_ids,
             "fragments": [asdict(fragment) for fragment in packet.fragments],
         }
-        return snapshot
+        from novel_harness.services.conversation import attach, collect_history
+
+        state = conversation_state or {
+            "version": 1, "scope": {"project_id": project.id, "chapter_id": chapter_id},
+            "turns": collect_history(session, project.id, chapter_id, source_revision),
+        }
+        return attach(snapshot, state, state["turns"])
 
     @staticmethod
     def _persist_entity_state_conflict(session, chapter_id, conflicts):
@@ -590,6 +545,10 @@ class CreationPipeline:
         contract: dict[str, Any],
         snapshot: dict[str, Any],
     ) -> AITextRequest:
+        if snapshot.get("conversation", {}).get("version") == 1:
+            from novel_harness.services.conversation import CONTINUATION_INSTRUCTION
+
+            instruction += CONTINUATION_INSTRUCTION
         return AITextRequest(
             task=task,
             developer_instruction=instruction + REFERENCE_POLICY,
@@ -631,8 +590,13 @@ class CreationPipeline:
                 tokens = check_input_budget(request, schema)
                 break
             except ContextBudgetError:
+                protected = {"conversation", "conversation_summary"} if (
+                    snapshot.get("conversation", {}).get("version") == 1
+                ) else set()
                 removable = next(
-                    (i for i in range(len(fragments) - 1, -1, -1) if not fragments[i]["hard"]), None
+                    (i for i in range(len(fragments) - 1, -1, -1)
+                     if not fragments[i]["hard"] and fragments[i]["source_type"] not in protected),
+                    None,
                 )
                 if removable is None:
                     raise

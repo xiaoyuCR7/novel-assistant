@@ -51,6 +51,7 @@ class CompatibleProvider:
         self._api_key = api_key
         self._transport = transport
         self.attempt_observer = attempt_observer
+        self.spending = None
 
     def _send(self, request, schema=None):
         check_input_budget(request, schema)
@@ -66,6 +67,7 @@ class CompatibleProvider:
             payload["stream_options"] = {"include_usage": True}
         if schema:
             payload["response_format"] = {"type": "json_object"}
+        spending_entry = None
         try:
             from novel_harness.ai.network_safety import SafeTransport
 
@@ -78,8 +80,18 @@ class CompatibleProvider:
                 transport=self._transport or SafeTransport(request.deadline_seconds),
             ) as client:
                 for attempt in range(2):
-                    if self.attempt_observer is not None:
-                        self.attempt_observer.before_send()
+                    spending_entry = (
+                        self.spending.reserve(request, schema) if self.spending else None
+                    )
+                    try:
+                        if self.attempt_observer is not None:
+                            self.attempt_observer.before_send()
+                    except BaseException:
+                        if spending_entry:
+                            self.spending.not_sent(spending_entry)
+                        raise
+                    if spending_entry:
+                        self.spending.sent(spending_entry)
                     try:
                         with client.stream(
                             "POST",
@@ -100,12 +112,33 @@ class CompatibleProvider:
                                 data = read_json_response(response, MAX_RESPONSE_BYTES, deadline)
                         break
                     except (httpx.ConnectError, httpx.ConnectTimeout):
+                        if spending_entry:
+                            self.spending.not_sent(spending_entry)
                         if self.attempt_observer is not None:
                             self.attempt_observer.not_sent()
                         if attempt:
                             raise ProviderExecutionError(
                                 "API 连接失败。", outcome="known", code="CONNECT_FAILED"
                             ) from None
+                # Even rejected/truncated output may be billed. Capture valid usage
+                # before validating the content, retaining the reservation otherwise.
+                usage = data.get("usage") if isinstance(data, dict) else None
+                if (
+                    spending_entry
+                    and isinstance(usage, dict)
+                    and all(
+                        type(usage.get(key)) is int and 0 <= usage[key] <= 1_000_000_000
+                        for key in ("prompt_tokens", "completion_tokens")
+                    )
+                ):
+                    self.spending.settle(
+                        spending_entry,
+                        {
+                            "input_tokens": usage["prompt_tokens"],
+                            "output_tokens": usage["completion_tokens"],
+                        },
+                        "provider",
+                    )
                 choice = data["choices"][0]
                 if not isinstance(choice, dict):
                     raise ValueError("Invalid choice")
@@ -116,7 +149,12 @@ class CompatibleProvider:
                 content = choice["message"]["content"]
                 if not isinstance(content, str) or not content.strip():
                     raise ValueError("Empty response")
-                return content, output_metadata(content, request, data, schema=schema)
+                metadata = output_metadata(content, request, data, schema=schema)
+                if spending_entry:
+                    self.spending.settle(
+                        spending_entry, metadata["usage"], metadata["usage_source"]
+                    )
+                return content, metadata
         except httpx.HTTPStatusError as exc:
             from novel_harness.ai.base import provider_http_error
 
@@ -132,6 +170,9 @@ class CompatibleProvider:
             raise ProviderExecutionError(
                 "API 请求结果未知；未自动重新发送。", code="PROVIDER_RESULT_UNKNOWN"
             ) from None
+        finally:
+            if spending_entry:
+                self.spending.unknown(spending_entry)
 
     def generate_text(self, request):
         content, metadata = self._send(request)
@@ -147,7 +188,8 @@ class CompatibleProvider:
         except (ValueError, TypeError, RecursionError):
             error = ProviderExecutionError(
                 "模型未返回有效 JSON，请换用支持 JSON 输出的模型后重试。",
-                outcome="known", code="INVALID_STRUCTURED_OUTPUT",
+                outcome="known",
+                code="INVALID_STRUCTURED_OUTPUT",
             )
             error.metadata = {"provider": self.name, "model": self.model, **metadata}
             raise error from None

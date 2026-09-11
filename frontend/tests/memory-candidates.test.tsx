@@ -628,7 +628,7 @@ it("invalidates only the mutation source chapter when the visible chapter change
   act(() => {
     app.client.setQueryData(["workspace", "project-1", "navigation"], {
       project: app.project,
-      nodes: [app.chapters[1], app.chapters[0]],
+      nodes: [app.chapters[1]],
     });
   });
   await waitFor(() => expect(screen.queryByRole("button", { name: "确认世界事实候选" })).not.toBeInTheDocument());

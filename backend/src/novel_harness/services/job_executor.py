@@ -145,7 +145,9 @@ class LocalJobExecutor:
                         raise HTTPException(409, detail={"code": "PROVIDER_CHANGED"})
 
                 def import_factory():
-                    return settings.provider_for_identity(identity, self.app.state.ai_provider)
+                    return settings.provider_for_identity(identity, self.app.state.ai_provider,
+                        spending_context={"project_id": vault.project_id,
+                                          "job_id": fence.import_batch_id, "stage": fence.unit_id})
 
                 run_import_unit(vault, fence, import_factory, validate_import_provider)
                 return True
@@ -173,15 +175,23 @@ class LocalJobExecutor:
                     )
                     if (
                         job.task_type
-                        not in {"chapter_summary", "preparation_analysis", "preparation_followup", "wiki_summary"}
+                        not in {
+                            "chapter_summary", "preparation_analysis", "preparation_followup",
+                            "wiki_summary", "quality_workflow",
+                        }
                         and current != embedding_identity
                     ):
                         raise HTTPException(409, detail={"code": "EMBEDDING_CHANGED"})
 
                 def factory(observer):
-                    return settings.provider_for_identity(identity, self.app.state.ai_provider)
+                    return settings.provider_for_identity(identity, self.app.state.ai_provider,
+                        spending_context={"project_id": vault.project_id,
+                                          "job_id": job_id, "stage": observer.stage_key})
 
-                if job.task_type == "wiki_summary":
+                if job.task_type == "quality_workflow":
+                    from novel_harness.services.quality_generation import generate_quality
+                    generate_quality(store, fence, factory, validate_provider=validate_provider)
+                elif job.task_type == "wiki_summary":
                     from novel_harness.services.wiki_generation import generate_wiki
                     generate_wiki(store, fence, factory, validate_provider=validate_provider)
                 elif job.task_type == "chapter_summary":

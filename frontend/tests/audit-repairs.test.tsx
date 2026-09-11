@@ -105,12 +105,13 @@ it("requires confirmation to repair corrupt model settings", async () => {
 
 it("retains unsent messages per project and chapter, including after remount", async () => {
   const props = { chapterTitle: "test", hasChapter: true, jobs: [], running: false, onSend: vi.fn(), onAccept: vi.fn(), onOpenManuscript: vi.fn() };
-  const first = render(<ChatWorkspace {...props} draftKey="p1:c1" />);
+  const first = render(<ChatWorkspace {...props} projectId="p1" chapterId="c1" draftKey="p1:c1" />);
   await userEvent.type(screen.getByLabelText("给 AI 的消息"), "private draft");
   first.unmount();
-  const second = render(<ChatWorkspace {...props} draftKey="p2:c1" />);
+  const second = render(<ChatWorkspace {...props} projectId="p2" chapterId="c1" draftKey="p2:c1" />);
   expect(screen.getByLabelText("给 AI 的消息")).toHaveValue("");
   second.unmount();
-  render(<ChatWorkspace {...props} draftKey="p1:c1" />);
+  render(<ChatWorkspace {...props} projectId="p1" chapterId="c1" draftKey="p1:c1" />);
   expect(screen.getByLabelText("给 AI 的消息")).toHaveValue("private draft");
+  expect(screen.queryByRole('button', { name: '恢复聊天草稿' })).not.toBeInTheDocument();
 });

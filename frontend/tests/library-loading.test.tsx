@@ -107,6 +107,66 @@ it('hydrates search hit full detail before editing and preserves its complete so
   expect(app.requests.some(url => url.endsWith('/library/idea/A'))).toBe(true);
 });
 
+it('edits the pin response revision while its detail refresh is still pending', async () => {
+  const app = studio();
+  const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+  const writes: Array<Record<string, unknown>> = [];
+  const reads: Array<() => void> = [];
+  let revision = 1, pinned = false;
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    if (!String(input).endsWith('/library/idea/A')) return originalFetch(input, init);
+    if (init?.method === 'PATCH') {
+      const body = JSON.parse(String(init.body)); writes.push(body);
+      if (body.revision !== revision) return new Response(JSON.stringify({ detail: { code: 'revision_conflict' } }), { status: 409 });
+      revision++; if (typeof body.is_pinned === 'boolean') pinned = body.is_pinned;
+      return new Response(JSON.stringify({ ...detail('A'), revision, is_pinned: pinned }));
+    }
+    const snapshot = { ...detail('A'), revision, is_pinned: pinned };
+    if (pinned) return new Promise<Response>(resolve => { reads.push(() => resolve(new Response(JSON.stringify(snapshot)))); });
+    return new Response(JSON.stringify(snapshot));
+  });
+  await userEvent.click(await screen.findByRole('button', { name: '参考资料' }));
+  await userEvent.click(screen.getByRole('button', { name: /素材A/ }));
+  await userEvent.click(await screen.findByRole('button', { name: '固定素材' }));
+  await waitFor(() => expect(reads).toHaveLength(1));
+  await userEvent.click(screen.getByRole('button', { name: '编辑素材' }));
+  fireEvent.change(screen.getByLabelText('设定内容'), { target: { value: '固定后立即编辑的正文' } });
+  await userEvent.click(screen.getByRole('button', { name: '保存素材' }));
+  await waitFor(() => expect(writes).toHaveLength(2));
+  expect(writes[1].revision).toBe(2);
+  expect(writes[1].content).toBe('固定后立即编辑的正文');
+  app.rendered.unmount();
+  await act(async () => { reads.forEach(release => release()); });
+});
+
+it('does not let a detail request begun before pinning roll back the pinned revision', async () => {
+  const app = studio();
+  const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+  let pinned = false, holdOld = false, releaseOld: (() => void) | undefined;
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    if (!String(input).endsWith('/library/idea/A')) return originalFetch(input, init);
+    if (init?.method === 'PATCH') {
+      pinned = true;
+      return new Response(JSON.stringify({ ...detail('A'), revision: 2, is_pinned: true }));
+    }
+    const snapshot = { ...detail('A'), revision: pinned ? 2 : 1, is_pinned: pinned };
+    if (holdOld && !pinned) return new Promise<Response>(resolve => { releaseOld = () => resolve(new Response(JSON.stringify(snapshot))); });
+    return new Response(JSON.stringify(snapshot));
+  });
+  await userEvent.click(await screen.findByRole('button', { name: '参考资料' }));
+  await userEvent.click(screen.getByRole('button', { name: /素材A/ }));
+  await screen.findByRole('button', { name: '固定素材' });
+  holdOld = true;
+  let refresh: Promise<void> | undefined;
+  await act(async () => { refresh = app.client.invalidateQueries({ queryKey: ['library', 'p', 'detail', 'idea', 'A'] }); });
+  await waitFor(() => expect(releaseOld).toBeDefined());
+  await userEvent.click(screen.getByRole('button', { name: '固定素材' }));
+  expect(await screen.findByRole('button', { name: '取消固定' })).toBeVisible();
+  await act(async () => { releaseOld?.(); await refresh; });
+  expect(app.client.getQueryData(['library', 'p', 'detail', 'idea', 'A'])).toMatchObject({ revision: 2, is_pinned: true });
+  expect(screen.getByRole('button', { name: '取消固定' })).toBeVisible();
+});
+
 it('ordinary chat uses projected pages and navigation, never unbounded library/full workspace/assets', async () => {
   const app = studio();
   await screen.findByLabelText('给 AI 的消息');

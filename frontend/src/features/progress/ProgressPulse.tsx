@@ -12,7 +12,7 @@ export function ProgressPulse({ progress }: { progress: Progress }) {
   return (
     <section className="progress-pulse" aria-label="创作脉搏">
       <div>
-        <span>全书进度</span>
+        <span>正式稿进度</span>
         <strong>
           {progress.current_words.toLocaleString("en-US")} /{" "}
           {progress.target_words.toLocaleString("en-US")} 字
@@ -21,7 +21,7 @@ export function ProgressPulse({ progress }: { progress: Progress }) {
       <div
         className="pulse-track"
         role="progressbar"
-        aria-label="全书字数进度"
+        aria-label="正式稿字数进度"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={percent}

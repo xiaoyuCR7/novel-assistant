@@ -133,6 +133,7 @@ function studio({ empty = false, pendingSave = false }: { empty?: boolean; pendi
       return response(candidate);
     }
     if (path.endsWith('/projects')) return response([project]);
+    if (path.endsWith('/quality/runs')) return response({ items: [], next_cursor: null });
     if (path.endsWith('/workspace/navigation')) return response({ project, nodes });
     const page = emptyLibraryPage(String(url)); if (page) return response(page);
     const view = emptyWorkspaceView(String(url), nodes); if (view) return response(view);
@@ -152,7 +153,7 @@ function studio({ empty = false, pendingSave = false }: { empty?: boolean; pendi
       if (path.endsWith('/summary')) return response(chapterId === a.id ? summary : null);
       if (path.endsWith(`/chapters/${chapterId}`)) return response(documents[chapterId]);
     }
-    if (path.endsWith('/settings/model')) return response({ mode: 'demo', model: '', base_url: '', has_api_key: false, external_consent: false });
+    if (path.endsWith('/settings/model')) return response({ mode: 'demo', model: '', base_url: '', has_api_key: false, external_consent: false, context_capacity: 32768, output_token_budget: 4096 });
     if (path.endsWith('/rag/health')) return response({ vectors: 'disabled', documents: 0, ledger_pending: false });
     if (path.endsWith('/progress')) return response({ current_words: 0, target_words: 1000, completion_ratio: 0, chapter_count: nodes.length, completed_chapters: 0, daily_goal: 100 });
     if (path.endsWith('/conflicts')) return response([]);
@@ -178,6 +179,31 @@ async function openEditor() {
   await userEvent.click(screen.getByRole('button', { name: '查看正文' }));
   return screen.findByLabelText('章节正文');
 }
+
+it('keeps unsaved manuscript in place when opening quality optimization', async () => {
+  const app = studio();
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const editor = await openEditor();
+  fireEvent.change(editor, { target: { value: '我的未保存新段落' } });
+  await userEvent.click(screen.getByRole('button', { name: '质量优化' }));
+  expect(await screen.findByText('请先保存正文和总结，再进入质量优化。')).toBeVisible();
+  expect(editor).toHaveValue('我的未保存新段落');
+  expect(screen.queryByRole('region', { name: '文章质量优化' })).not.toBeInTheDocument();
+  expect(confirm).not.toHaveBeenCalled();
+  expect(app.writes).toHaveLength(0);
+});
+
+it('opens quality workspace from creation without invoking a model', async () => {
+  const app = studio();
+  await screen.findByLabelText('给 AI 的消息');
+  await userEvent.click(screen.getByRole('button', { name: '质量优化' }));
+  expect(await screen.findByRole('region', { name: '文章质量优化' })).toBeVisible();
+  expect(screen.getByRole('button', { name: '创作' })).toHaveAttribute('aria-current', 'page');
+  expect(screen.queryByLabelText('资料工作区')).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '返回写作' }));
+  expect(await screen.findByLabelText('给 AI 的消息')).toBeVisible();
+  expect(app.writes).toHaveLength(0);
+});
 
 it.each([false, true])('retains manuscript and contract in the same editor when dirty A disappears (all=%s)', async all => {
   const app = studio();

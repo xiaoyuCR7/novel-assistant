@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { JobSummary } from '../../lib/api';
 import { hasPublishedSummary } from './jobSemantics';
+import { DiagnosticError } from '../../components/DiagnosticError';
 
 const stages: Record<string, string> = { context_embedding: '检索参考', plan: '规划', draft: '初稿',
   'review.repair': '修复审校格式与证据', 'continuity_review.repair': '修复连续性审校',
@@ -15,10 +16,10 @@ export function JobStatus({ job, onCancel, onResume, onRepair, onReplace, replac
   onReplace?: () => Promise<unknown>; replaceDisabled?: boolean;
   sourceUnavailable?: boolean;
 }) {
-  const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [busy, setBusy] = useState(false), [error, setError] = useState<unknown>();
   async function act(action: () => Promise<unknown>) {
     setBusy(true); setError('');
-    try { await action(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    try { await action(); } catch (e) { setError(e); }
     finally { setBusy(false); }
   }
   const unknown = !!job.replacement_requires_confirmation || job.recovery_reason === 'result_unknown';
@@ -27,7 +28,12 @@ export function JobStatus({ job, onCancel, onResume, onRepair, onReplace, replac
   const canReplace = !!onReplace && job.allowed_actions?.includes('replace') && !publishedSummary;
   const chunk = job.current_stage?.match(/^chapter_summary\.chunk\.(\d+)$/);
   const merge = job.current_stage?.match(/^chapter_summary\.merge\.(\d+)\.(\d+)$/);
-  const stageLabel = chunk ? `分段内容检查（第${Number(chunk[1]) + 1}段）`
+  const quality = job.current_stage?.match(/^quality\.(\d+)\.(write|review|rewrite|final)$/);
+  const conversation = job.current_stage?.match(/^conversation\.compact\.(\d+)$/);
+  const qualityStages: Record<string, string> = { write: '写作', review: '质量检测', rewrite: '正文优化', final: '优化复核' };
+  const stageLabel = quality ? `第${Number(quality[1]) + 1}章 · ${qualityStages[quality[2]]}`
+    : conversation ? `整理较早对话（第${Number(conversation[1]) + 1}部分）`
+    : chunk ? `分段内容检查（第${Number(chunk[1]) + 1}段）`
     : merge ? `汇总内容检查（第${Number(merge[1]) + 1}轮/第${Number(merge[2]) + 1}组）`
     : job.current_stage ? stages[job.current_stage] ?? job.current_stage : '';
   const contentReview = job.recovery_reason === 'content_review_required';
@@ -50,6 +56,6 @@ export function JobStatus({ job, onCancel, onResume, onRepair, onReplace, replac
     {canReplace && <button disabled={busy || sourceUnavailable || replaceDisabled || summaryNeedsCancel}
       onClick={() => void act(onReplace!)}>按当前设置新建</button>}
     {canReplace && summaryNeedsCancel && <p className="subtle">先取消原总结任务，再按当前设置新建；旧记录仍会保留。</p>}
-    {error && <p role="alert" className="error-note">{error}</p>}
+    {!!error && <DiagnosticError error={error} />}
   </div>;
 }

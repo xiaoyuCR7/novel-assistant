@@ -67,7 +67,7 @@ def migrate_legacy_database(registry: ProjectVaultRegistry) -> None:
                         predicate = "project_id=?"
                     elif name in {
                         "generation_artifacts", "ai_job_controls", "ai_job_stage_attempts",
-                        "ai_job_action_receipts",
+                        "ai_job_action_receipts", "conversation_jobs",
                     }:
                         predicate = "job_id IN (SELECT id FROM ai_jobs WHERE project_id=?)"
                     elif name == "conflict_options":

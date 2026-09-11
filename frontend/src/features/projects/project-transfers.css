@@ -1,0 +1,30 @@
+.project-transfer { display: grid; gap: 20px; min-width: 0; color: #1d1d1f; }
+.project-transfer header h2 { margin: 0 0 8px; font-size: 24px; letter-spacing: -.025em; }
+.project-transfer p { margin: 0; color: #6e6e73; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.project-transfer h3 { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
+.project-transfer button { min-height: 44px; }
+.transfer-field { display: grid; gap: 8px; min-width: 0; font-size: 14px; font-weight: 600; }
+.transfer-field input, .transfer-field select { width: 100%; min-width: 0; min-height: 44px; }
+.transfer-options { display: grid; gap: 20px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.transfer-scope { display: flex; flex-wrap: wrap; gap: 8px 24px; border: 0; padding: 0; margin: 0; }
+.transfer-scope legend { margin-bottom: 8px; font-weight: 600; font-size: 14px; }
+.transfer-choice { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; padding: 10px 0; font-size: 14px; line-height: 1.6; }
+.transfer-choice input { flex: 0 0 18px; width: 18px; height: 18px; min-height: 0; margin: 3px 0 0; accent-color: #0071e3; }
+.transfer-choice span { min-width: 0; overflow-wrap: anywhere; }
+.transfer-choice small { color: #6e6e73; margin-left: 10px; }
+.transfer-preview { display: grid; gap: 12px; border-block: 1px solid #e5e5ea; padding-block: 20px; }
+.transfer-preview dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 4px 0; }
+.transfer-preview dt { font-size: 12px; color: #6e6e73; }
+.transfer-preview dd { margin: 4px 0 0; font-size: 20px; }
+.transfer-nodes { max-height: 280px; overflow: auto; scrollbar-width: thin; border-block: 1px solid #e5e5ea; padding: 8px; }
+.project-transfer footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 12px; }
+.project-transfer .error { color: #b42318; }
+.project-todo-list { list-style: none; padding: 0; margin: 0; }
+.project-todo-list li { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px 0; border-bottom: 1px solid #e5e5ea; }
+.project-todo-list li > div { min-width: 0; }
+.project-todo-list li > button { flex-shrink: 0; }
+.project-todo-list h3 { font-size: 16px; margin: 6px 0; }
+.todo-chapter { color: #6e6e73; font-size: 12px; overflow-wrap: anywhere; }
+.todo-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; }
+@media (max-width: 540px) { .project-todo-list li { align-items: flex-start; flex-direction: column; gap: 12px; } }
+@media (max-width: 480px) { .transfer-preview dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

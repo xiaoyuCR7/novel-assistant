@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BoundedJsonObject, ChapterSummary, GeneratedMemoryCandidateListItem, MemoryCandidate, SummaryEvidence } from "../../lib/types";
+import { useLocalDraft } from '../../lib/draftStore';
+import { DraftRecoveryNotice } from '../../components/LocalDraftRecovery';
 const fieldLabels: Record<string, string> = {
   recap: "章节总结",
   plot_changes: "剧情因果",
@@ -243,6 +245,7 @@ function editableDetails(details: ChapterSummary["details"]): Record<string, str
   ));
 }
 export function ChapterSummaryPanel({
+  projectId,
   summary,
   onSave,
   saving = false,
@@ -262,6 +265,7 @@ export function ChapterSummaryPanel({
   onRejectCandidate,
   onCandidatePendingChange,
 }: {
+  projectId?: string;
   summary: ChapterSummary;
   saving?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
@@ -301,6 +305,8 @@ export function ChapterSummaryPanel({
   useEffect(() => { currentDraft.current = draft; }, [draft]);
   useEffect(() => { currentlyDeleted.current = deleted; }, [deleted]);
   const dirty = editing && (deleted || draft !== JSON.stringify([baseline.recap, { ...editableDetails(baseline.details), recap: baseline.recap }]));
+  const recovery = useLocalDraft({ projectId, chapterId: summary.chapter_id, kind: 'summary',
+    title: summary.title, baseRevision: baseline.revision, baseId: baseline.id, values: { recap, details }, dirty });
   const candidateDirty = generatedCandidates?.some((candidate) => candidateStates[candidate.id]?.dirty) ?? false;
   const candidatePending = generatedCandidates?.some((candidate) => candidateStates[candidate.id]?.pending) ?? false;
   const identityChanged = summary.id !== baseline.id;
@@ -324,6 +330,14 @@ export function ChapterSummaryPanel({
   useEffect(() => { onCandidatePendingChange?.(candidatePending); }, [candidatePending, onCandidatePendingChange]);
   return (
     <section className="summary-panel">
+      <DraftRecoveryNotice drafts={recovery.candidates} status={recovery.status} onDiscard={recovery.discard}
+        onRestore={saved => {
+          if (dirty && !window.confirm('用恢复稿替换当前总结编辑？当前草稿仍保留在本机恢复箱。')) return;
+          recovery.adopt(saved); setRecap(String(saved.values.recap));
+          setDetails(saved.values.details as Record<string, string | string[]>);
+          setBaseline({ ...summary, id: saved.baseId!, revision: saved.baseRevision ?? summary.revision });
+          setEditing(true); setError('');
+        }} />
       <div className="summary-heading">
         <span className="badge">
           {summary.origin === "author_edited" ? "作者已编辑" : "AI 总结"}
@@ -340,7 +354,7 @@ export function ChapterSummaryPanel({
         <div>
           <p role="alert">总结已删除。你的本地草稿已保留，可选中复制；保存已禁用，不会自动恢复被删除的总结。</p>
           {onDiscard && <button disabled={saving || busy} onClick={() => {
-            if (window.confirm("确定放弃已删除总结的本地草稿？请先复制需要保留的内容。")) onDiscard();
+            if (window.confirm("确定放弃已删除总结的本地草稿？请先复制需要保留的内容。") && recovery.discardCurrent()) onDiscard();
           }}>放弃已删除总结的本地草稿</button>}
         </div>
       )}

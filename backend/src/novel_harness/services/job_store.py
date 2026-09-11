@@ -42,7 +42,9 @@ class JobStore:
         command = deepcopy(command)
         if command["project_id"] != self.project_id:
             raise HTTPException(404, detail={"code": "PROJECT_NOT_FOUND"})
-        if command["task_type"] == "wiki_summary":
+        if command["task_type"] == "quality_workflow":
+            operation = "quality"
+        elif command["task_type"] == "wiki_summary":
             operation = "wiki"
         elif command["task_type"] == "chapter_summary":
             operation = "chapter_summary"
@@ -78,6 +80,13 @@ class JobStore:
                 ))
                 response = self.serialize_in_session(session, reused_id)
             else:
+                from novel_harness.services import conversation_threads
+                thread = None
+                if operation == "writing":
+                    thread = conversation_threads.assert_writable(
+                        session, self.project_id, command["chapter_id"],
+                        command.get("conversation_id"),
+                    )
                 if (
                     command["task_type"] == "chapter_summary"
                     and command.get("replaces_job_id") is None
@@ -103,6 +112,10 @@ class JobStore:
                 )
                 session.add(job)
                 session.flush()
+                if thread is not None and command.get("conversation_id") is not None:
+                    from novel_harness.db.models import ConversationJob
+                    conversation_threads.materialize(session, thread)
+                    session.add(ConversationJob(job_id=job.id, conversation_id=thread.id))
                 session.add(
                     AIJobControl(
                         job_id=job.id,
@@ -144,6 +157,13 @@ class JobStore:
         source = self._job(session, source_id)
         if source.chapter_id != command["chapter_id"] or source.task_type != command["task_type"]:
             raise HTTPException(404, detail={"code": "JOB_NOT_FOUND"})
+        from novel_harness.services import conversation_threads
+        if source.task_type in conversation_threads.TASKS:
+            expected_thread = command.get("conversation_id") or conversation_threads.default_id(
+                self.project_id, command["chapter_id"],
+            )
+            if conversation_threads.job_conversation_id(session, source) != expected_thread:
+                raise HTTPException(409, detail={"code": "CONVERSATION_REPLACEMENT_MISMATCH"})
         control = session.get(AIJobControl, source_id)
         if control and control.effects.get("summary_id"):
             raise HTTPException(409, detail={"code": "SUMMARY_ALREADY_PUBLISHED"})
@@ -193,6 +213,8 @@ class JobStore:
             or job.status != "running"
         ):
             raise HTTPException(409, detail={"code": "JOB_FENCE_CHANGED"})
+        from novel_harness.services.conversation_threads import assert_job_writable
+        assert_job_writable(session, job)
         return job, control
 
     def claim(self, job_id, epoch):
@@ -382,7 +404,15 @@ class JobStore:
             job, control = self.assert_running(session, fence)
             job.status = "failed" if failed else "recovery_required"
             job.error_code = reason
-            job.error_message = "任务已暂停，正文和已保存结果未被覆盖。"
+            job.error_message = {
+                "QUALITY_REVIEW_REQUIRED": (
+                    "本章优化后仍需作者确认，写作会话已暂停。请查看质量报告后决定是否继续。"
+                ),
+                "QUALITY_SOURCE_CHANGED": (
+                    "正文、章节顺序或参考资料已变化。原候选仍保留，"
+                    "请取消任务并基于最新内容重新开始。"
+                ),
+            }.get(reason, "任务已暂停，正文和已保存结果未被覆盖。")
             control.recovery_reason = reason
 
     def cancel(self, job_id):
@@ -419,6 +449,8 @@ class JobStore:
             control = session.get(AIJobControl, job_id)
             if control is None or job.status not in {"recovery_required", "failed"}:
                 raise HTTPException(409, detail={"code": "JOB_NOT_RESUMABLE"})
+            from novel_harness.services.conversation_threads import assert_job_writable
+            assert_job_writable(session, job)
             if (
                 control.format_version != 1
                 or job.prompt_version != prompt_version_for(job.task_type)
@@ -636,14 +668,29 @@ class JobStore:
                 job.status in {"recovery_required", "failed"}
                 and control.format_version == 1
                 and job.prompt_version == prompt_version_for(job.task_type)
+                and not (
+                    job.task_type == "quality_workflow" and control.effects.get("accepted_chapters")
+                )
             ):
                 actions.append("resume")
         elif job.status in {"recovery_required", "failed"}:
             actions.append("cancel")
-        if job.status in REPLACEABLE and not (control and control.effects.get("summary_id")):
+        if (
+            job.status in REPLACEABLE
+            and job.task_type != "quality_workflow"
+            and not (control and control.effects.get("summary_id"))
+        ):
             actions.append("replace")
+        from novel_harness.services import conversation_threads
+        conversation_id = conversation_threads.job_conversation_id(session, job)
+        if conversation_id:
+            try:
+                conversation_threads.assert_job_writable(session, job)
+            except HTTPException:
+                actions = [action for action in actions if action not in {"resume", "replace"}]
         return {
             **serialize(job),
+            "conversation_id": conversation_id,
             "control_revision": control.control_revision if control else 0,
             "status_url": f"/api/v1/projects/{self.project_id}/ai/jobs/{job_id}",
             "current_stage": latest.stage_key if latest else None,

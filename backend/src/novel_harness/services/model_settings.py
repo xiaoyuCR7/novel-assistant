@@ -1,5 +1,6 @@
 """Application-local model configuration, separate from every novel Vault."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -25,15 +26,38 @@ class ModelConfigInput(ExecutionLimits):
     external_consent: bool = False
     clear_api_key: bool = False
     repair_config: bool = False
+    expected_config_revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class CorruptModelConfig(ValueError):
     pass
 
 
+class ModelConfigChanged(ValueError):
+    pass
+
+
+def config_revision(config):
+    """Opaque revision, deliberately separate from the durable provider identity."""
+    # Defaults and persisted snapshots can encode the same deadline as 180 or 180.0.
+    canonical = {**config, **ExecutionLimits.model_validate(config).model_dump()}
+    return hashlib.sha256(json.dumps(canonical, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def public_config(config):
+    return {key: config[key] for key in (
+        "mode", "base_url", "model", "external_consent", *ExecutionLimits.model_fields,
+    )} | {"has_api_key": bool(config.get("protected_key")),
+          "config_revision": config_revision(config)}
+
+
 class ModelSettings:
     def __init__(self, settings):
+        from novel_harness.services.spending import SpendingLedger
+
         self.path = settings.data_dir / ".settings" / "model.json"
+        self.spending = SpendingLedger(self.path.with_name("spending.db"))
         self.lock = RLock()
         self.default = {
             **ExecutionLimits().model_dump(),
@@ -79,29 +103,19 @@ class ModelSettings:
                 )
             }
 
-    def provider_for_identity(self, expected, fallback):
+    def provider_for_identity(self, expected, fallback, *, spending_context=None):
         from fastapi import HTTPException
 
         with self.lock:
             if self.identity() != expected:
                 raise HTTPException(409, detail={"code": "PROVIDER_CHANGED"})
-            return self.provider(fallback)
+            return self.provider(fallback, spending_context=spending_context)
 
     def public(self):
         with self.lock:
-            config = self._read()
-            return {
-                key: config[key]
-                for key in (
-                    "mode",
-                    "base_url",
-                    "model",
-                    "external_consent",
-                    *ExecutionLimits.model_fields,
-                )
-            } | {"has_api_key": bool(config.get("protected_key"))}
+            return public_config(self._read())
 
-    def save(self, payload):
+    def save(self, payload, *, _protected_key=None):
         with self.lock:
             if payload.output_token_budget >= payload.context_capacity:
                 raise ValueError("输出预算必须小于模型上下文容量。")
@@ -113,6 +127,9 @@ class ModelSettings:
                     raise
                 old = dict(self.default)
                 repair = True
+            if (payload.expected_config_revision is not None
+                    and payload.expected_config_revision != config_revision(old)):
+                raise ModelConfigChanged("模型设置已在其他窗口更改，请重新读取后再保存。")
             key = payload.api_key.get_secret_value().strip()
             base = payload.base_url.strip()
             model = payload.model.strip()
@@ -130,7 +147,7 @@ class ModelSettings:
             if payload.mode == "local":
                 LocalProvider(base, model)  # Reuse strict loopback-only validation.
             if key:
-                protected = protect(key)
+                protected = protect(key) if _protected_key is None else _protected_key
             if base != old.get("base_url") and not key:
                 protected = ""
             data = {
@@ -159,7 +176,7 @@ class ModelSettings:
                     os.unlink(temporary)
             return self.public()
 
-    def provider(self, fallback):
+    def provider(self, fallback, *, spending_context=None):
         with self.lock:
             if not self.path.exists():
                 return fallback
@@ -170,9 +187,11 @@ class ModelSettings:
                 return LocalProvider(config["base_url"], config["model"])
             if not config["external_consent"]:
                 raise ValueError("外部 API 尚未授权。")
-            return CompatibleProvider(
+            provider = CompatibleProvider(
                 config["base_url"], config["model"], reveal(config["protected_key"])
             )
+            provider.spending = self.spending.meter(config, **(spending_context or {}))
+            return provider
 
 
 def selected_provider(request):

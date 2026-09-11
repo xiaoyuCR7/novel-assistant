@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from novel_harness.schemas.common import Record
@@ -22,3 +24,10 @@ class ProjectRead(Record):
     target_words: int
     daily_goal: int
     status: str
+
+
+class ManuscriptExportRequest(BaseModel):
+    format: Literal["txt", "markdown"] = "txt"
+    source: Literal["working", "published"] = "published"
+    node_ids: list[str] = Field(default_factory=list, max_length=2000)
+    order: Literal["story", "selection"] = "story"

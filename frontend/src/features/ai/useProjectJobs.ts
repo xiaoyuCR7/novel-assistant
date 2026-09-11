@@ -10,28 +10,28 @@ export function pollInterval(statuses: string[], unchanged: number): number | fa
     ? Math.min(1000 * 2 ** Math.min(unchanged, 3), 8000) : false;
 }
 
-export function useProjectJobs(projectId: string, chapterId?: string, kind: 'writing' | 'summary' = 'writing') {
+export function useProjectJobs(projectId: string, chapterId?: string, kind: 'writing' | 'summary' = 'writing', conversationId?: string, enabled = true) {
   const observed = useRef({ sample: '', fingerprint: '', unchanged: 0 });
   const cache = useQueryClient();
-  const historyKey = ['jobs', projectId, chapterId, kind];
+  const historyKey = ['jobs', projectId, chapterId, kind, ...(conversationId ? [conversationId] : [])];
   const activeKey = [...historyKey, 'active'];
   const query = useInfiniteQuery({
     queryKey: historyKey,
-    queryFn: ({ pageParam }) => projectApi(projectId).jobsPage(chapterId, kind, pageParam),
+    queryFn: ({ pageParam }) => projectApi(projectId).jobsPage(chapterId, kind, pageParam, false, conversationId),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: page => page.next_cursor ?? undefined,
-    enabled: kind !== 'summary' || !!chapterId,
+    enabled: enabled && (kind !== 'summary' || !!chapterId),
   });
   const active = useQuery({
     queryKey: activeKey,
-    enabled: kind !== 'summary' || !!chapterId,
+    enabled: enabled && (kind !== 'summary' || !!chapterId),
     queryFn: async () => {
       const api = projectApi(projectId);
       const items: JobSummary[] = [];
       const cursors = new Set<string>();
       let before: string | undefined;
       do {
-        const page = await api.jobsPage(chapterId, kind, before, true);
+        const page = await api.jobsPage(chapterId, kind, before, true, conversationId);
         items.push(...page.items);
         before = page.next_cursor ?? undefined;
         if (before && cursors.has(before)) throw new Error('任务分页游标重复，请刷新重试。');
@@ -51,7 +51,7 @@ export function useProjectJobs(projectId: string, chapterId?: string, kind: 'wri
         if (ids.has(prior.id)) continue;
         if (nonTerminal(prior)) {
           // Fetch a full result only once on completion, never on each status poll.
-          const job = await api.job(prior.id);
+          const job = await api.job(prior.id, conversationId);
           cache.setQueryData(['job-detail', projectId, job.id, job.status,
             job.control_revision, job.accepted_version_id], job);
           const summary: JobSummary = { ...prior, status: job.status, updated_at: job.updated_at,
@@ -80,7 +80,7 @@ export function useProjectJobs(projectId: string, chapterId?: string, kind: 'wri
       // Advance backoff once per successful data commit, not per evaluation.
       const sample = JSON.stringify([query.queryHash, query.state.dataUpdateCount, query.state.dataUpdatedAt]);
       if (query.state.status === 'success' && sample !== observed.current.sample) {
-        const fingerprint = JSON.stringify([projectId, chapterId, kind,
+        const fingerprint = JSON.stringify([projectId, chapterId, kind, conversationId,
           jobs.map(job => [job.id, job.status, job.current_stage, job.control_revision])]);
         observed.current = fingerprint === observed.current.fingerprint
           ? { sample, fingerprint, unchanged: observed.current.unchanged + 1 }

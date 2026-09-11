@@ -19,22 +19,28 @@ from novel_harness.ai.local_provider import LocalProvider
 from novel_harness.api.routes import (
     ai,
     assets,
+    automatic_backups,
     chapters,
+    conversations,
     feedback,
     imports,
     library,
     memory,
     preparation,
     projects,
+    quality,
+    spending,
     story,
     summaries,
     wiki,
+    writing_goals,
 )
 from novel_harness.api.routes import settings as model_settings_routes
 from novel_harness.config import Settings
 from novel_harness.db import models as _models  # noqa: F401
 from novel_harness.db.migration import migrate_legacy_database
 from novel_harness.db.vault import ProjectVaultRegistry
+from novel_harness.services.automatic_backups import AutomaticBackups
 from novel_harness.services.executor_lock import ExecutorLock
 from novel_harness.services.import_drafts import ImportDraftStore, ImportLimits
 from novel_harness.services.job_executor import LocalJobExecutor
@@ -60,6 +66,7 @@ def create_app(*, start_executor=True) -> FastAPI:
             settings.prepare_directories()
             registry = ProjectVaultRegistry(settings.data_dir)
             executor = LocalJobExecutor(app)
+            backups = None
             try:
                 migrate_legacy_database(registry)
                 app.state.settings = settings
@@ -71,11 +78,16 @@ def create_app(*, start_executor=True) -> FastAPI:
                     settings.data_dir / "imports", ImportLimits.from_settings(settings)
                 )
                 app.state.job_executor = executor
+                backups = AutomaticBackups(registry)
+                app.state.automatic_backups = backups
                 executor.initialize()
                 if start_executor:
                     executor.start()
+                    backups.start()
                 yield
             finally:
+                if backups is not None:
+                    backups.stop()
                 executor.stop()
                 registry.dispose()
 
@@ -169,6 +181,8 @@ def create_app(*, start_executor=True) -> FastAPI:
         }
 
     app.include_router(projects.router, prefix="/api/v1")
+    app.include_router(automatic_backups.router, prefix="/api/v1")
+    app.include_router(writing_goals.router, prefix="/api/v1")
     app.include_router(story.router, prefix="/api/v1")
     app.include_router(chapters.router, prefix="/api/v1")
     app.include_router(ai.router, prefix="/api/v1")
@@ -179,6 +193,9 @@ def create_app(*, start_executor=True) -> FastAPI:
     app.include_router(memory.router, prefix="/api/v1")
     app.include_router(preparation.router, prefix="/api/v1")
     app.include_router(wiki.router, prefix="/api/v1")
+    app.include_router(quality.router, prefix="/api/v1")
+    app.include_router(conversations.router, prefix="/api/v1")
+    app.include_router(spending.router, prefix="/api/v1")
     app.include_router(model_settings_routes.router, prefix="/api/v1")
     app.include_router(imports.router, prefix="/api/v1")
     app.include_router(imports.analysis_router, prefix="/api/v1")

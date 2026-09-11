@@ -46,7 +46,7 @@ test('editing a search hit preserves the complete material, not just its chunk',
     .toBe(original + '\nAuthor-approved addition.');
 });
 
-test('normalized chapter saves permit chat and an explicit budget unblocks a long chapter', async ({ page, request }) => {
+test('normalized chapter saves permit chat and following the model removes a manual budget cap', async ({ page, request }) => {
   const project = await (await request.post('/api/v1/projects', { data: { title: '长章节预算验收' } })).json();
   const base = `/api/v1/projects/${project.id}`;
   const chapter = await (await request.post(base + '/nodes', {
@@ -65,6 +65,10 @@ test('normalized chapter saves permit chat and an explicit budget unblocks a lon
   await page.getByRole('button', { name: '收起正文', exact: true }).click();
   await expect(page.getByLabel('章节正文')).toHaveCount(0);
   await page.getByRole('button', { name: '续写', exact: true }).click();
+  const model = await (await request.get('/api/v1/settings/model')).json();
+  const available = model.context_capacity - model.output_token_budget;
+  await expect(page.getByLabel('输入预算 Token')).toHaveValue(String(available));
+  await page.getByLabel('输入预算 Token').fill('12000');
   const prompt = page.getByLabel('给 AI 的消息');
   await prompt.fill('继续写一段风中的故事');
   const preflight = page.waitForResponse(response => response.url().endsWith('/ai/jobs/preflight'));
@@ -76,13 +80,14 @@ test('normalized chapter saves permit chat and an explicit budget unblocks a lon
   await expect(page.getByRole('alert')).toContainText('当前输入预算 12000');
   await expect(prompt).toHaveValue('继续写一段风中的故事');
   expect(await (await request.get(base + '/ai/jobs')).json()).toHaveLength(0);
-  await page.getByLabel('输入预算 Token').fill('20000');
+  await page.getByRole('button', { name: '跟随模型', exact: true }).click();
+  await expect(page.getByLabel('输入预算 Token')).toHaveValue(String(available));
   const submitted = page.waitForResponse(response => response.request().method() === 'POST'
     && response.url().endsWith('/ai/jobs'));
   await page.getByRole('button', { name: '发送消息' }).click();
   const response = await submitted;
   expect(response.status()).toBe(202);
-  expect(response.request().postDataJSON().token_budget).toBe(20000);
+  expect(response.request().postDataJSON().token_budget).toBe(available);
   await expect(page.getByRole('button', { name: '写入正文', exact: true })).toBeVisible();
   const document = await (await request.get(base + '/chapters/' + chapter.id)).json();
   expect(document.content).toBe(original);

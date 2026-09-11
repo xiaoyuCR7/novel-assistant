@@ -2,6 +2,8 @@ from job_helpers import run_job, save_chapter
 
 
 def test_author_journey_crosses_all_backend_layers(client):
+    settings = client.get("/api/v1/settings/model").json()
+    token_budget = settings["context_capacity"] - settings["output_token_budget"]
     project = client.post(
         "/api/v1/projects",
         json={
@@ -40,7 +42,7 @@ def test_author_journey_crosses_all_backend_layers(client):
             "chapter_id": chapter["id"],
             "task_type": "full_chapter",
             "instructions": "用档案记录与现实错位制造悬念。",
-            "token_budget": 2000,
+            "token_budget": token_budget,
         },
     ).json()
     assert job["status"] == "succeeded"
@@ -81,7 +83,7 @@ def test_author_journey_crosses_all_backend_layers(client):
             "chapter_id": chapter["id"],
             "task_type": "full_chapter",
             "instructions": "采用已确认的风格规则继续写作。",
-            "token_budget": 2000,
+            "token_budget": token_budget,
         },
     ).json()
     assert job["status"] == "succeeded", (job["error_code"], job["error_message"])

@@ -39,6 +39,7 @@ export class ApiError extends Error {
     public current?: unknown,
     public code?: string,
     public jobId?: string,
+    public diagnosticId?: string,
   ) {
     super(message);
   }
@@ -73,6 +74,9 @@ export async function apiError(response: Response): Promise<ApiError> {
     detail?.current,
     typeof detail?.code === "string" ? detail.code : undefined,
     typeof detail?.job_id === "string" ? detail.job_id : undefined,
+    typeof detail?.diagnostic_id === 'string' ? detail.diagnostic_id
+      : isRecord(payload) && typeof payload.diagnostic_id === 'string' ? payload.diagnostic_id
+      : response.headers.get('X-Diagnostic-ID') ?? undefined,
   );
 }
 
@@ -171,6 +175,8 @@ export interface Asset {
   model: string;
 }
 export interface JobSummary {
+  conversation_id?: string | null;
+  inherited?: boolean;
   id: string;
   status: string;
   task_type: string;
@@ -457,12 +463,14 @@ export function projectApi(projectId: string) {
       submit('/ai/jobs', { ...data, project_id: projectId }, key),
     preflightJob: (data: object) =>
       send<TaskBudgetPreflight>('/ai/jobs/preflight', { ...data, project_id: projectId }),
-    job: (id: string) => get<AIJob>(`/ai/jobs/${encodeURIComponent(id)}`),
+    job: (id: string, conversationId?: string) => get<AIJob>(`/ai/jobs/${encodeURIComponent(id)}`
+      + (conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : '')),
     jobPreview: (id: string) => get<JobPreview>(`/ai/jobs/${encodeURIComponent(id)}/preview`),
-    jobsPage: (chapterId?: string, kind: 'writing' | 'summary' = 'writing', before?: string, activeOnly = false) =>
+    jobsPage: (chapterId?: string, kind: 'writing' | 'summary' = 'writing', before?: string, activeOnly = false, conversationId?: string) =>
       get<JobPage>(`/ai/jobs/page?kind=${kind}&active_only=${activeOnly}&limit=50`
         + (chapterId ? `&chapter_id=${encodeURIComponent(chapterId)}` : '')
-        + (before ? `&before=${encodeURIComponent(before)}` : '')),
+        + (before ? `&before=${encodeURIComponent(before)}` : '')
+        + (conversationId ? `&conversation_id=${encodeURIComponent(conversationId)}` : '')),
     cancelJob: (id: string) => send<AIJob>(`/ai/jobs/${encodeURIComponent(id)}/cancel`),
     resumeJob: (id: string, data: object, key: string) =>
       submit(`/ai/jobs/${encodeURIComponent(id)}/resume`, data, key),

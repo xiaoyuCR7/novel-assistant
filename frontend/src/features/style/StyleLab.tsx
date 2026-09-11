@@ -20,6 +20,7 @@ interface StyleLabProps {
   profiles?: StyleProfile[];
   conflicts?: MemoryConflict[];
   onUpdateProfile?: (profile: StyleProfile, isActive: boolean) => Promise<void>;
+  onPinProfile?: (profile: StyleProfile, isPinned: boolean) => Promise<void>;
   onConfirm: (id: string, instruction?: string) => Promise<void>;
   onDisable: (id: string) => Promise<void>;
   onCreateProfile?: (profile: {
@@ -44,6 +45,7 @@ export function StyleLab({
   onDisable,
   onCreateProfile,
   onUpdateProfile,
+  onPinProfile,
   conflicts = [],
 }: StyleLabProps) {
   const [name, setName] = useState("");
@@ -79,6 +81,7 @@ export function StyleLab({
         <span className="eyebrow">风格实验室</span>
         <h3>偏好必须经过你的确认</h3>
       </header>
+      <p className="subtle">必遵守：已启用并固定，每次作为约束带入。按需参考：已启用但未固定，仅在检索选中或明确引用时采用。停用方案不会生效。</p>
       {error && <p role="alert" className="error-note">{error}</p>}
       {conflicts.filter(issue => issue.code === 'STYLE_CONFLICT').map((issue, index) =>
         <p role="status" className="error-note" key={index}>{issue.message}</p>)}
@@ -136,8 +139,12 @@ export function StyleLab({
       <div className="preference-list">
         {profiles.map((profile) => (
           <article key={profile.id}>
-            <small>{profile.is_active ? "当前方案" : "备用方案"}</small>
-            <p>{profile.name}</p>
+              <small>{!profile.is_active ? '已停用' : profile.is_pinned ? '必遵守' : '按需参考'}</small>
+              <p>{profile.name}</p>
+              {onPinProfile && <button type="button" disabled={busy || !profile.is_active}
+                aria-label={`${profile.is_pinned ? '取消固定' : '固定'}方案 ${profile.name}`}
+                onClick={() => void act(() => onPinProfile(profile, !profile.is_pinned))}>
+                {profile.is_pinned ? '改为按需参考' : '设为必遵守'}</button>}
             {onUpdateProfile && <button type="button" disabled={busy}
               aria-label={`${profile.is_active ? '停用' : '启用'}方案 ${profile.name}`}
               onClick={() => void act(() => onUpdateProfile(profile, !profile.is_active))}>

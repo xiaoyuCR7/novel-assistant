@@ -1,0 +1,23 @@
+.model-profiles { min-width: 0; margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line-light); color: var(--ink-950); font: 14px/1.65 var(--font-ui); }
+.model-profiles > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.model-profiles h2 { margin: 0; font-size: 21px; letter-spacing: -.025em; }
+.model-profiles header p, .model-profiles .subtle { margin: 8px 0 16px; color: var(--text-secondary); font-size: 13px; }
+.model-profiles button { min-height: 44px; padding: 9px 13px; border-radius: 10px; }
+.model-profiles button:disabled { opacity: .55; cursor: default; }
+.model-profiles button:focus-visible, .model-profiles input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.model-profile-list { list-style: none; padding: 0; margin: 14px 0 0; max-height: 360px; overflow-y: auto; scrollbar-width: thin; }
+.model-profile-list li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line-light); }
+.model-profile-list li > div { min-width: 0; }
+.model-profile-list strong, .model-profile-list p, .model-profile-list small { overflow-wrap: anywhere; }
+.model-profile-list p { margin: 4px 0; }
+.model-profile-list small { color: var(--text-secondary); }
+.model-profile-current { display: inline-block; color: var(--accent-text); font-size: 12px; padding-left: 10px; }
+.model-profile-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.model-profile-editor { margin-top: 16px; padding: 16px; border: 1px solid var(--line-light); border-radius: 12px; background: var(--paper-100); }
+.model-profile-editor label { display: grid; gap: 8px; }
+.model-profile-editor input { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid var(--control-border); border-radius: 10px; background: var(--paper-50); color: var(--ink-950); font: inherit; }
+.model-profile-editor p { font-size: 13px; overflow-wrap: anywhere; }
+.model-profile-editor > div { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.model-profile-editor > button { margin: 8px 8px 0 0; }
+@media (max-width: 640px) { .model-profiles > header, .model-profile-list li { align-items: flex-start; flex-direction: column; gap: 8px; } .model-profile-actions { flex-wrap: wrap; } }
+@media (prefers-reduced-motion: reduce) { .model-profiles *, .model-profiles *::before, .model-profiles *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }

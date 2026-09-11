@@ -4,6 +4,19 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import { FocusShell } from "../components/FocusShell";
 import { ChatWorkspace } from "../features/ai/ChatWorkspace";
 import { ModelSettings } from "../features/settings/ModelSettings";
+import { SpendingPanel } from '../features/settings/SpendingPanel';
+import { AutomaticBackups } from '../features/settings/AutomaticBackups';
+import { QualityCoverage } from '../features/quality/QualityCoverage';
+import type { CoverageAction } from '../lib/qualityCoverage';
+import { WritingGoals } from '../features/progress/WritingGoals';
+import { BackupRestore } from '../features/projects/BackupRestore';
+import { ManuscriptExport } from '../features/projects/ManuscriptExport';
+import { ProjectTodos } from '../features/projects/ProjectTodos';
+import type { ProjectTodo } from '../lib/projectTodos';
+import { LocalDraftRecovery } from '../components/LocalDraftRecovery';
+import { DiagnosticError } from '../components/DiagnosticError';
+import { ConversationsPanel } from '../features/ai/ConversationsPanel';
+import { conversationApi } from '../lib/conversationApi';
 import { ProjectPreparation } from "../features/preparation/ProjectPreparation";
 import { AssetLibrary } from "../features/assets/AssetLibrary";
 import { ConflictCenter } from "../features/conflicts/ConflictCenter";
@@ -18,12 +31,14 @@ import { EntityStudio } from "../features/story/EntityStudio";
 import { StoryMap } from "../features/story/StoryMap";
 import { StyleLab } from "../features/style/StyleLab";
 import { WikiWorkspace } from "../features/wiki/WikiWorkspace";
+import { QualityWorkspace } from "../features/quality/QualityWorkspace";
 import { ChapterWorkspace } from "../features/writing/ChapterWorkspace";
 import { VersionPanel } from "../features/writing/VersionPanel";
 import { api, ApiError, projectApi, type AIJob, type JobSummary } from "../lib/api";
 
 import type { BoundedJsonObject, ChapterDocument, ChapterSummary, GeneratedMemoryCandidateListItem, ImportCommitResponse, ImportMemoryCandidate, LibraryItem, MaterialReference, MemoryCandidateBulkConfirmEntry, Project, StoryNode } from "../lib/types";
-import { WorkspaceRail, type View } from "../components/WorkspaceRail";
+import { WorkspaceRail, views, type View } from "../components/WorkspaceRail";
+import { readWorkspaceState, saveWorkspaceConversation, saveWorkspaceJob, saveWorkspaceState } from '../lib/workspaceState';
 import { ProjectSwitcher } from "../features/projects/ProjectSwitcher";
 import { MaterialSidebar } from "../features/library/MaterialSidebar";
 import { refreshLibrary } from '../features/library/refreshLibrary';
@@ -41,7 +56,7 @@ import { RagStatus } from "../features/ai/RagStatus";
 import { useProjectJobs } from '../features/ai/useProjectJobs';
 import { JobStatus } from '../features/ai/JobStatus';
 import { acknowledge, pendingSubmissions, prepareSubmission, type PendingSubmission } from '../features/ai/pendingSubmission';
-import { DEFAULT_INPUT_BUDGET, inputBudgetValue, readInputBudget, requireFittingPreflight, saveInputBudget } from '../features/ai/inputBudget';
+import { clearInputBudget, inputBudgetValue, modelInputBudget, readInputBudget, requireFittingPreflight, resolveInputBudget, saveInputBudget } from '../features/ai/inputBudget';
 import { blocksSummaryGeneration, hasPublishedSummary } from '../features/ai/jobSemantics';
 
 type MemoryCandidateCommand =
@@ -72,6 +87,8 @@ export function App() {
   const [creating, setCreating] = useState(false),
     [importing, setImporting] = useState(false),
     [dirty, setDirty] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreBusy, setRestoreBusy] = useState(false);
   const importWizardRef = useRef<BookImportWizardHandle>(null);
   const project =
     projectsQuery.data?.find((p) => p.id === active) ?? projectsQuery.data?.[0];
@@ -118,13 +135,19 @@ export function App() {
     if (importWizardRef.current) void importWizardRef.current.cancel();
     else setImporting(false);
   }
+  const restoreDialog = restoring && <Modal title="从备份恢复小说" onClose={() => { if (!restoreBusy) setRestoring(false); }}>
+    <BackupRestore onBusyChange={setRestoreBusy} onCancel={() => setRestoring(false)} onRestored={async restoredProject => {
+      activateProject(restoredProject); setRestoring(false); setDirty(false);
+      await queryClient.invalidateQueries({ queryKey: ['projects'] });
+    }} />
+  </Modal>;
   if (projectsQuery.isLoading)
     return <div className="app-loading">正在打开本地创作室…</div>;
   if (projectsQuery.error && !projectsQuery.data)
     return (
       <main className="error-page">
         <h1>无法连接本地服务</h1>
-        <p>{projectsQuery.error.message}</p>
+        <DiagnosticError error={projectsQuery.error} />
         <button onClick={() => projectsQuery.refetch()}>重新连接</button>
       </main>
     );
@@ -138,6 +161,8 @@ export function App() {
             await createProject.mutateAsync(draft);
           }}
         />
+        <div className="project-tool-links"><button onClick={() => setRestoring(true)}>从备份恢复小说</button></div>
+        {restoreDialog}
         {importing && (
           <Modal title="导入已有小说" onClose={closeImport}>
             <BookImportWizard ref={importWizardRef} onComplete={activateImportedProject} onCancel={() => setImporting(false)} />
@@ -148,9 +173,9 @@ export function App() {
   return (
     <>
       {projectsQuery.error && (
-        <p role="alert">小说列表刷新失败，当前编辑已保留：{projectsQuery.error.message}
+        <div>小说列表刷新失败，当前编辑已保留：<DiagnosticError error={projectsQuery.error} />
           <button onClick={() => projectsQuery.refetch()}>重试列表刷新</button>
-        </p>
+        </div>
       )}
       <ProjectStudio
         key={project.id}
@@ -158,9 +183,14 @@ export function App() {
         projects={projectsQuery.data ?? []}
         onProjectChange={switchProject}
         onCreate={() => setCreating(true)}
+        onRestore={() => {
+          if (dirty && !window.confirm('当前章节有未保存修改，恢复后将切换项目。确定打开备份恢复？')) return;
+          setRestoring(true);
+        }}
         onDirtyChange={setDirty}
         dirty={dirty}
       />
+      {restoreDialog}
       {creating && (
         <Modal title="创建独立小说项目" onClose={() => setCreating(false)}>
           <ProjectLauncher
@@ -199,6 +229,7 @@ function ProjectStudio({
   projects,
   onProjectChange,
   onCreate,
+  onRestore,
   onDirtyChange,
   dirty,
 }: {
@@ -206,13 +237,16 @@ function ProjectStudio({
   projects: Project[];
   onProjectChange: (id: string) => void;
   onCreate: () => void;
+  onRestore: () => void;
   onDirtyChange: (dirty: boolean) => void;
   dirty: boolean;
 }) {
   const client = useMemo(() => projectApi(projectId), [projectId]);
   const queryClient = useQueryClient();
-  const [view, setView] = useState<View>("ai"),
-    [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [restored] = useState(() => readWorkspaceState(projectId));
+  const [view, setView] = useState<View>(() => views.find(item => item[0] === restored.view)?.[0] ?? 'ai'),
+    [selectedNodeId, setSelectedNodeId] = useState<string | null>(restored.selectedNodeId ?? null);
+  useEffect(() => { saveWorkspaceState(projectId, { view }); }, [projectId, view]);
   // Pin only the active dirty session's identity; the editors still own their drafts.
   const [draftChapter, setDraftChapter] = useState<StoryNode>();
   const [job, setJob] = useState<AIJob | null>(null),
@@ -241,10 +275,16 @@ function ProjectStudio({
     return () => { mounted.current = false; };
   }, []);
   const [manuscriptOpen, setManuscriptOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false), [draftRecoveryOpen, setDraftRecoveryOpen] = useState(false);
+  const [conversationPanelOpened, setConversationPanelOpened] = useState(false);
+  const [todosOpen, setTodosOpen] = useState(false), [qualityTargetRunId, setQualityTargetRunId] = useState<string>();
+  const [coverageOpen, setCoverageOpen] = useState(false), [goalsOpen, setGoalsOpen] = useState(false);
+  const [freshQualityReview, setFreshQualityReview] = useState(0);
+  const todoRequest = useRef(0);
   const [pending, setPending] = useState(() => pendingSubmissions(projectId));
   const [inputBudget, setInputBudget] = useState(() => {
     const saved = readInputBudget(projectId);
-    return { value: saved ?? String(DEFAULT_INPUT_BUDGET), overridden: saved !== undefined };
+    return { value: saved ?? '', overridden: saved !== undefined };
   });
   const published = useRef(new Map<string, string>());
   const [selected, setSelected] = useState<LibraryItem | null>(null),
@@ -303,6 +343,13 @@ function ProjectStudio({
       ? undefined
       : chapterNode?.id;
   const sourceUnavailable = !!chapterId && !chapterNodes.some(node => node.id === chapterId);
+  useEffect(() => {
+    if (!workspace || draftChapter || dirty) return;
+    const next = selectedNodeId === 'project-chat' || workspace.nodes.some(node => node.id === selectedNodeId)
+      ? selectedNodeId! : workspace.nodes.find(node => node.kind === 'chapter')?.id ?? 'project-chat';
+    if (next !== selectedNodeId) setSelectedNodeId(next);
+    saveWorkspaceState(projectId, { selectedNodeId: next });
+  }, [workspace, selectedNodeId, projectId, draftChapter, dirty]);
   function hasChapterSource(id = chapterId) {
     const navigation = queryClient.getQueryData<{ nodes: StoryNode[] }>(["workspace", projectId, 'navigation']);
     return !id || !!navigation?.nodes.some(node => node.kind === 'chapter' && node.id === id);
@@ -355,24 +402,82 @@ function ProjectStudio({
     queryFn: () => client.chapter(chapterId!),
     enabled: !!chapterId && !sourceUnavailable,
   });
-  const jobsQuery = useProjectJobs(projectId, chapterId);
-  const [jobSelection, setJobSelection] = useState<{ scope: string; id: string } | null>(null);
-  const jobScope = `${projectId}:${chapterId ?? 'project'}`;
-  const selectedJobSummary = (jobSelection?.scope === jobScope
-    ? jobsQuery.data?.find(item => item.id === jobSelection.id) : undefined) ?? jobsQuery.data?.at(-1);
+  const conversationScope = chapterId ?? 'project';
+  const [conversationSelections, setConversationSelections] = useState<Record<string, string>>(restored.conversationSelections ?? {});
+  const selectedConversationId = conversationSelections[conversationScope];
+  const conversations = useMemo(() => conversationApi(projectId), [projectId]);
+  const conversationQuery = useQuery({ queryKey: ['conversation', projectId, selectedConversationId],
+    queryFn: ({ signal }) => conversations.detail(selectedConversationId!, signal), enabled: !!selectedConversationId });
+  const conversationId = conversationQuery.data?.is_default ? undefined : selectedConversationId;
+  const conversationUnavailable = !!selectedConversationId && (!conversationQuery.data || !!conversationQuery.error ||
+    conversationQuery.data.status !== 'active' || (conversationQuery.data.chapter_id ?? null) !== (chapterId ?? null));
+  async function selectConversation(id: string) {
+    const next = await conversations.detail(id);
+    if (next.status !== 'active' || (next.chapter_id ?? null) !== (chapterId ?? null)) throw Error('会话不属于当前写作范围或已归档。');
+    queryClient.setQueryData(['conversation', projectId, id], next);
+    setConversationSelections(current => ({ ...current, [conversationScope]: id }));
+    saveWorkspaceConversation(projectId, conversationScope, id);
+    setJob(null);
+  }
+  const jobsQuery = useProjectJobs(projectId, chapterId, 'writing', conversationId, !conversationUnavailable);
+  const [jobSelections, setJobSelections] = useState<Record<string, string>>(restored.jobSelections ?? {});
+  const [missingJobs, setMissingJobs] = useState<Set<string>>(() => new Set());
+  const jobScope = `${projectId}:${chapterId ?? 'project'}${conversationId ? `:${conversationId}` : ''}`;
+  function setJobSelection(next: { scope: string; id: string } | null) {
+    const scope = next?.scope ?? jobScope;
+    setJobSelections(current => {
+      const updated = { ...current }; delete updated[scope];
+      if (next) updated[scope] = next.id;
+      return updated;
+    });
+    saveWorkspaceJob(projectId, scope, next?.id);
+  }
+  const historyJobs = (jobsQuery.data ?? []).filter(item => !missingJobs.has(`${jobScope}:${item.id}`));
+  const selectedJobId = jobSelections[jobScope] ?? historyJobs.at(-1)?.id;
+  const knownJobSummary = historyJobs.find(item => item.id === selectedJobId);
   const selectedJobQuery = useQuery({
-    queryKey: ['job-detail', projectId, selectedJobSummary?.id, selectedJobSummary?.status,
-      selectedJobSummary?.control_revision, selectedJobSummary?.accepted_version_id],
-    queryFn: () => client.job(selectedJobSummary!.id),
-    enabled: !!selectedJobSummary && (selectedJobSummary.status === 'succeeded' ||
-      (jobSelection?.scope === jobScope && jobSelection.id === selectedJobSummary.id)),
+    queryKey: ['job-detail', projectId, selectedJobId, knownJobSummary?.status,
+      knownJobSummary?.control_revision, knownJobSummary?.accepted_version_id, ...(knownJobSummary ? [] : [jobScope]), ...(conversationId ? [conversationId] : [])],
+    queryFn: async () => {
+      const value = await client.job(selectedJobId!, conversationId);
+      if (!knownJobSummary && (value.id !== selectedJobId || value.project_id !== projectId ||
+          (value.chapter_id ?? null) !== (chapterId ?? null) ||
+          !['chat', 'continue', 'full_chapter', 'plan', 'draft', 'review', 'suggest', 'rewrite', 'scene_description'].includes(value.task_type)))
+        throw new ApiError(404, '原对话已不在当前章节中。');
+      return value;
+    },
+    enabled: !!workspace && !conversationUnavailable && !!selectedJobId && (!knownJobSummary || knownJobSummary.status === 'succeeded' || !!jobSelections[jobScope]),
     staleTime: Infinity,
   });
+  const missingJob = selectedJobQuery.error instanceof ApiError && selectedJobQuery.error.status === 404;
+  useEffect(() => {
+    if (!selectedJobId || !workspace) return;
+    if (missingJob) {
+      setMissingJobs(current => new Set([...current, `${jobScope}:${selectedJobId}`]));
+      setJobSelections(current => {
+        if (current[jobScope] !== selectedJobId) return current;
+        const next = { ...current }; delete next[jobScope]; return next;
+      });
+      saveWorkspaceJob(projectId, jobScope);
+    } else if (selectedJobQuery.data) saveWorkspaceJob(projectId, jobScope, selectedJobId);
+  }, [selectedJobId, selectedJobQuery.data, missingJob, jobScope, projectId, workspace]);
+  const selectedJobSummary = knownJobSummary ?? (missingJob ? undefined : selectedJobQuery.data);
+  const visibleJobs = !knownJobSummary && selectedJobSummary
+    ? [...historyJobs, selectedJobSummary].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? '') || a.id.localeCompare(b.id))
+    : historyJobs;
   const summaryJobs = useProjectJobs(projectId, chapterId, 'summary');
   const modelQuery = useQuery({
     queryKey: ["model-settings"],
     queryFn: api.modelSettings,
   });
+  let automaticInputBudget = '', modelBudgetError = '';
+  try { automaticInputBudget = String(modelInputBudget(modelQuery.data)); }
+  catch (cause) { modelBudgetError = cause instanceof Error ? cause.message : String(cause); }
+  const displayedInputBudget = inputBudget.overridden ? inputBudget.value : automaticInputBudget;
+  function newTaskInputBudget() {
+    if (modelQuery.error) throw Error('模型配置不可用，请打开设置检查。');
+    return resolveInputBudget(modelQuery.data, inputBudget.overridden ? inputBudget.value : undefined);
+  }
   const versionsQuery = useInfiniteQuery({
     queryKey: ["versions", projectId, chapterId],
     queryFn: ({ pageParam }) => client.versionPage(chapterId!, pageParam),
@@ -726,6 +831,7 @@ function ProjectStudio({
   }
 
   async function resumeTask(task: JobSummary, confirm: boolean) {
+    if (task.inherited) throw Error('继承记录为只读。');
     requireChapterSource(task.chapter_id ?? undefined);
     beginWorking();
     try {
@@ -736,6 +842,7 @@ function ProjectStudio({
     } finally { endWorking(); }
   }
   async function cancelTask(task: JobSummary) {
+    if (task.inherited) throw Error('继承记录为只读。');
     await client.cancelJob(task.id);
     await queryClient.invalidateQueries({ queryKey: ['jobs', projectId, task.chapter_id ?? undefined] });
   }
@@ -750,6 +857,7 @@ function ProjectStudio({
     requireFittingPreflight(report, budget);
   }
   async function replaceTask(task: JobSummary) {
+    if (task.inherited) throw Error('继承记录为只读，请在当前会话新建任务。');
     requireChapterSource();
     if (editSession.manuscriptDirty || editSession.summaryDirty)
       throw Error('请先保存正文与总结，再按当前设置新建任务。');
@@ -772,16 +880,15 @@ function ProjectStudio({
         throw Error('新输入已保留，请先保存正文与总结，再按当前设置新建任务。');
       const unknown = source.replacement_requires_confirmation ?? source.recovery_reason === 'result_unknown';
       const warning = unknown ? '原任务结果未知，可能已经完成或计费，新建可能产生重复费用。\n' : '';
-      const budget = summary ? undefined : inputBudget.overridden
-        ? inputBudgetValue(inputBudget.value) : source.token_budget ?? DEFAULT_INPUT_BUDGET;
-      const budgetNote = summary ? '' : `本次输入预算 ${budget} Token${inputBudget.overridden ? '（本项目设置）' : '（沿用原任务）'}。`;
+      const budget = summary ? undefined : newTaskInputBudget();
+      const budgetNote = summary ? '' : `本次输入预算 ${budget} Token${inputBudget.overridden ? '（本项目省费上限）' : '（跟随模型容量）'}。`;
       if (!window.confirm(`${warning}按当前设置与已保存正文新建任务？${budgetNote}将重新检索资料，并可能再次调用模型及计费。原任务和失败记录保留，不会自动取消。`)) return;
       const link = { replaces_job_id: source.id, confirm_unknown: unknown };
       const command = summary
         ? { expected_revision: current!.revision, ...link }
         : { chapter_id: chapterId ?? null, task_type: source.task_type,
           instructions: source.instructions ?? '', token_budget: budget,
-          expected_revision: current?.revision ?? null, ...link };
+          expected_revision: current?.revision ?? null, ...(conversationId ? { conversation_id: conversationId } : {}), ...link };
       if (!summary) await preflightWriting(command);
       const item = prepareSubmission(projectId, chapterId ?? null, command, summary ? 'summary' : 'writing');
       const next = await deliver(item);
@@ -795,6 +902,9 @@ function ProjectStudio({
     "workspace", "chapter", "versions", "summary", "progress", "library",
     "search", "context", "trash", "conflicts", "rag", "assets", "jobs", "style-rules",
   ]) {
+    void queryClient.invalidateQueries({ queryKey: ['project-todos', projectId] });
+    void queryClient.invalidateQueries({ queryKey: ['quality-coverage', projectId] });
+    void queryClient.invalidateQueries({ queryKey: ['writing-goals', projectId] });
     await Promise.all(
       keys.map((key) =>
         key === 'library' ? refreshLibrary(queryClient, projectId) : queryClient.invalidateQueries({ queryKey:
@@ -859,6 +969,10 @@ function ProjectStudio({
       setNotice("请等待当前请求结束后再切换工作区。");
       return false;
     }
+    if (next === "quality" && (dirty || editSession.manuscriptDirty || editSession.summaryDirty)) {
+      setNotice("请先保存正文和总结，再进入质量优化。");
+      return false;
+    }
     if (
       dirty &&
       (view === "write" || view === "ai") &&
@@ -866,6 +980,7 @@ function ProjectStudio({
     )
       return false;
     clearDirty();
+    if (next === 'quality') { setQualityTargetRunId(undefined); setFreshQualityReview(0); }
     setView(next);
     setTrashOpen(false);
     return true;
@@ -889,6 +1004,54 @@ function ProjectStudio({
     }
     setView(destination);
     setJob(null);
+  }
+  function openManuscript(id: string) {
+    if (requestPending()) { setNotice('请等待当前请求结束后再打开章节。'); return false; }
+    if (!hasChapterSource(id)) { setNotice('此章节已删除或不在当前目录中，请先恢复章节或刷新工作区；本机草稿仍可复制。'); return false; }
+    if (dirty && !window.confirm('本章有未保存修改。确定打开另一章节？')) return false;
+    clearDirty(); setSelectedNodeId(id); setView('write'); setJob(null); setTrashOpen(false); setManuscriptOpen(true);
+    return true;
+  }
+  async function openTodo(item: ProjectTodo) {
+    if (requestPending()) throw Error('请等待当前请求结束后再打开待办。');
+    if (dirty || editSession.manuscriptDirty || editSession.summaryDirty) throw Error('请先保存正文和总结，再打开待办。');
+    const generation = ++todoRequest.current;
+    if (item.chapter_id && !workspace?.nodes.some(node => node.id === item.chapter_id))
+      throw Error('章节已从当前目录移除，请刷新工作区后再试。');
+    const thread = item.destination === 'ai' && item.conversation_id ? await conversations.detail(item.conversation_id) : undefined;
+    if (!mounted.current || !editSession.active || generation !== todoRequest.current) return;
+    if (requestPending() || editSession.manuscriptDirty || editSession.summaryDirty)
+      throw Error('读取待办期间的新输入已保留，请先保存后再跳转。');
+    if (item.chapter_id) requireChapterSource(item.chapter_id);
+    if (thread && (thread.status !== 'active' || (thread.chapter_id ?? null) !== item.chapter_id))
+      throw Error('此任务的会话已归档、删除或不属于目标章节，请先恢复会话。');
+    const scope = item.chapter_id ?? 'project';
+    if (item.destination === 'ai') {
+      if (thread) {
+        queryClient.setQueryData(['conversation', projectId, thread.id], thread);
+        setConversationSelections(current => ({ ...current, [scope]: thread.id }));
+        saveWorkspaceConversation(projectId, scope, thread.id);
+      }
+      if (item.job_id) {
+        const targetScope = `${projectId}:${scope}${thread && !thread.is_default ? `:${thread.id}` : ''}`;
+        setJobSelection({ scope: targetScope, id: item.job_id });
+      }
+    }
+    clearDirty(); setTrashOpen(false); setJob(null);
+    if (item.destination === 'quality') { setQualityTargetRunId(item.job_id ?? undefined); setFreshQualityReview(0); }
+    setSelectedNodeId(item.chapter_id ?? 'project-chat'); setView(item.destination);
+    if (item.destination === 'write') setManuscriptOpen(true);
+    setTodosOpen(false);
+  }
+  function openCoverage(item: CoverageAction) {
+    if (requestPending()) throw Error('请等待当前请求结束后再打开审校。');
+    if (dirty || editSession.manuscriptDirty || editSession.summaryDirty)
+      throw Error('请先保存正文和总结，再打开审校。');
+    requireChapterSource(item.chapter_id);
+    setSelectedNodeId(item.chapter_id);
+    setQualityTargetRunId(item.action === 'report' ? item.job_id : undefined);
+    setFreshQualityReview(current => item.action === 'review' ? current + 1 : 0);
+    setView('quality'); setCoverageOpen(false); setTrashOpen(false); setJob(null);
   }
   async function openReference(item: MaterialReference) {
     const generation = ++selectionGeneration.current;
@@ -924,14 +1087,14 @@ function ProjectStudio({
     return (
       <main className="error-page">
         <h1>项目无法打开</h1>
-        <p>{workspaceQuery.error.message}</p>
+        <DiagnosticError error={workspaceQuery.error} />
         <button onClick={() => workspaceQuery.refetch()}>重试</button>
       </main>
     );
   if (!workspace || !project)
     return <div className="app-loading">正在打开独立资料库…</div>;
   const defaultContext = (selectedJobQuery.data ?? job)?.context_snapshot ?? {
-    token_budget: Number(inputBudget.value) || 0,
+    token_budget: Number(displayedInputBudget) || 0,
     total_estimated_tokens: 0,
     fragments: [],
   };
@@ -940,10 +1103,37 @@ function ProjectStudio({
   const activeView = view in viewQueries ? viewQueries[view as keyof typeof viewQueries] : undefined;
   const content = (() => {
     if (activeView && !activeView.data) return activeView.error
-      ? <p role="alert">资料工作区加载失败：{activeView.error.message}<button onClick={() => activeView.refetch()}>重试资料工作区</button></p>
+      ? <div>资料工作区加载失败：<DiagnosticError error={activeView.error} /><button onClick={() => activeView.refetch()}>重试资料工作区</button></div>
       : <p role="status">正在加载资料工作区…</p>;
     if (view === "wiki") return <WikiWorkspace projectId={projectId} chapters={chapterNodes}
       onOpen={openReference} onOpenChapter={selectNode} />;
+    if (view === "quality") return <>
+      <div className="quality-navigation"><button onClick={() => navigate("ai")}>返回写作</button></div>
+      <QualityWorkspace key={qualityTargetRunId ?? `quality-${freshQualityReview}`} initialRunId={qualityTargetRunId} startNew={freshQualityReview > 0}
+        projectId={projectId} chapters={chapterNodes} initialChapterId={chapterId}
+        sourceUnavailable={sourceUnavailable}
+        beforeStart={() => {
+          if (requestPending()) throw Error("请等待当前编辑请求结束后再开始质量优化。");
+          if (dirty || editSession.manuscriptDirty || editSession.summaryDirty)
+            throw Error("请先保存正文和总结，再开始质量优化。");
+          if (!modelQuery.data || modelQuery.error) throw Error("模型配置尚未确认，请在设置中检查后重试。");
+          return true;
+        }}
+        beforeAccept={id => {
+          requireChapterSource(id);
+          if (requestPending()) throw Error("请等待当前编辑请求结束后再采纳优化稿。");
+          if (dirty || editSession.manuscriptDirty || editSession.summaryDirty)
+            throw Error("请先保存正文和总结，再采纳优化稿。");
+          return true;
+        }}
+        onAccepted={async id => {
+          await Promise.all(["chapter", "versions", "summary"].map(key =>
+            queryClient.invalidateQueries({ queryKey: [key, projectId, id] })));
+          await refreshWriting(["workspace", "progress", "library", "search", "context", "conflicts", "rag"]);
+          setNotice(<><span>采纳的正文已保存。确认章节后，可继续生成总结并更新连续性记录。</span>
+            <button onClick={() => openManuscript(id)}>打开章节，完成本章</button></>);
+        }} onOpenChapter={openManuscript} />
+    </>;
     if (view === "library")
       return (
         <section className="library-page">
@@ -1038,7 +1228,7 @@ function ProjectStudio({
           }}
         />
       );
-    if (view === "settings") return <ModelSettings />;
+    if (view === "settings") return <><ModelSettings /><SpendingPanel projectId={projectId} /><AutomaticBackups key={projectId} projectId={projectId} /></>;
     if (view === "preparation")
       return <ProjectPreparation projectId={projectId} client={client} />;
     if (view === "conflicts")
@@ -1080,6 +1270,10 @@ function ProjectStudio({
               });
             } finally { await refreshWriting(); }
           }}
+          onPinProfile={async (profile, isPinned) => {
+            try { await client.editMaterial({ type: 'style', id: profile.id }, { revision: profile.revision, is_pinned: isPinned }); }
+            finally { await refreshWriting(); }
+          }}
           onCreateProfile={async (profile) => {
             await client.createStyle(profile);
             await refreshWriting();
@@ -1111,7 +1305,7 @@ function ProjectStudio({
       return (
         <section className="empty-chapter">
           <h2>正文加载失败</h2>
-          <p role="alert">{chapterQuery.error.message}</p>
+          <DiagnosticError error={chapterQuery.error} />
           <button onClick={() => chapterQuery.refetch()}>重试加载</button>
         </section>
       );
@@ -1127,12 +1321,14 @@ function ProjectStudio({
     return (
       <>
         {chapterQuery.error && (
-          <p role="alert">正文刷新失败，当前编辑已保留：{chapterQuery.error.message}
+          <div>正文刷新失败，当前编辑已保留：<DiagnosticError error={chapterQuery.error} />
             <button onClick={() => chapterQuery.refetch()}>重试正文刷新</button>
-          </p>
+          </div>
         )}
         <ChapterWorkspace
           key={chapterId}
+          projectId={projectId}
+          chapterId={chapterId}
           title={chapterNode?.title ?? "未命名章节"}
           document={chapterQuery.data}
           saving={working}
@@ -1161,6 +1357,7 @@ function ProjectStudio({
           {visibleSummary && (
             <ChapterSummaryPanel
               key={chapterId}
+              projectId={projectId}
               summary={visibleSummary}
               deleted={summaryQuery.data === null}
               saving={working || sourceUnavailable}
@@ -1393,10 +1590,13 @@ function ProjectStudio({
                   revision: item.revision,
                   is_pinned: !item.is_pinned,
                 });
+                const detailKey = ['library', projectId, 'detail', next.type, next.id];
+                await queryClient.cancelQueries({ queryKey: detailKey, exact: true });
+                queryClient.setQueryData(detailKey, next);
                 if (mounted.current && generation === selectionGeneration.current) setSelected(next);
                 await refreshWriting();
               } catch (e) {
-                setNotice(String(e));
+                setNotice(<DiagnosticError error={e} />);
               }
             }}
             onEdit={(item) => {
@@ -1419,6 +1619,21 @@ function ProjectStudio({
         </>
       }
     >
+      <div className="project-tool-links" aria-label="项目工具">
+        <button onClick={() => setTodosOpen(true)}>创作待办</button>
+        <button onClick={() => setCoverageOpen(true)}>整书审校</button>
+        <button onClick={() => setGoalsOpen(true)}>创作目标</button>
+        <button onClick={() => setDraftRecoveryOpen(true)}>恢复本机草稿</button>
+        <button onClick={() => setExportOpen(true)}>导出正文</button>
+        <button onClick={onRestore}>恢复项目备份</button>
+      </div>
+      {coverageOpen && <Modal title="整书审校" onClose={() => setCoverageOpen(false)}><QualityCoverage projectId={projectId} onOpen={openCoverage} /></Modal>}
+      {goalsOpen && <Modal title="创作与交稿目标" onClose={() => setGoalsOpen(false)}><WritingGoals projectId={projectId} onSaved={async () => {
+        await Promise.all(['progress', 'workspace'].map(key => queryClient.invalidateQueries({ queryKey: [key, projectId] })));
+      }} /></Modal>}
+      {todosOpen && <Modal title="创作待办" onClose={() => { todoRequest.current++; setTodosOpen(false); }}><ProjectTodos projectId={projectId} onOpen={openTodo} /></Modal>}
+      {exportOpen && <Modal title="导出小说正文" onClose={() => setExportOpen(false)}><ManuscriptExport projectId={projectId} nodes={workspace.nodes} onClose={() => setExportOpen(false)} /></Modal>}
+      {draftRecoveryOpen && <Modal title="本机草稿恢复箱" onClose={() => setDraftRecoveryOpen(false)}><LocalDraftRecovery projectId={projectId} onOpenChapter={id => { if (openManuscript(id)) setDraftRecoveryOpen(false); }} /></Modal>}
       {importAnalysisQuery.data && (
         <ImportAnalysisCard
           analysis={importAnalysisQuery.data}
@@ -1478,7 +1693,7 @@ function ProjectStudio({
           </div>
         </Modal>
       )}
-      {!isCreation && view !== "settings" && (
+      {!isCreation && view !== "settings" && view !== "quality" && (
         <div className="library-toolbar">
           <label>
             资料分类
@@ -1575,30 +1790,67 @@ function ProjectStudio({
         />
       ) : isCreation ? (
         <>
+        <div className="quality-entry"><button onClick={() => navigate("quality")}>
+          <Icon name="spark" />质量优化
+        </button></div>
+        <details className="conversation-management" onToggle={event => { if (event.currentTarget.open) setConversationPanelOpened(true); }}>
+        <summary>会话与历史{conversationQuery.data?.title ? ` · ${conversationQuery.data.title}` : ''}</summary>
+        {conversationPanelOpened && <ConversationsPanel projectId={projectId} chapterId={chapterId} selectedId={selectedConversationId}
+          branchFromJobId={selectedJobSummary?.status === 'succeeded' ? selectedJobSummary.id : undefined}
+          beforeChange={async () => { if (requestPending()) throw Error('请等待当前请求结束后再切换会话。'); return true; }}
+          onSelect={selectConversation}
+          onLifecycleChange={async thread => {
+            if (thread.status !== 'active' && (thread.id === selectedConversationId || !selectedConversationId && thread.is_default)) {
+              setConversationSelections(current => ({ ...current, [conversationScope]: thread.id }));
+              saveWorkspaceConversation(projectId, conversationScope, thread.id);
+              setJob(null);
+            }
+            await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['conversation', projectId] }),
+            queryClient.invalidateQueries({ queryKey: ['jobs', projectId] }),
+            queryClient.invalidateQueries({ queryKey: ['project-todos', projectId] }),
+          ]); }} />}
+        </details>
         {view === "ai" && (!preparationQuery.data || !Array.isArray(preparationQuery.data)) && (
           <ProjectPreparation projectId={projectId} client={client} compact onOpenFull={() => navigate("preparation")} />
         )}
         <div
           className={`conversation-layout ${manuscriptOpen ? "with-manuscript" : ""}`}
         >
-          <ChatWorkspace
-            key={chapterId ?? "project"}
+          {!knownJobSummary && selectedJobId && selectedJobQuery.isPending && <p role="status">正在恢复上次对话…</p>}
+          {!knownJobSummary && !missingJob && selectedJobQuery.error && <p role="alert">上次对话读取失败：{selectedJobQuery.error.message}
+            <button onClick={() => { void selectedJobQuery.refetch(); }}>重试读取</button></p>}
+          {conversationUnavailable && <p role="status">{conversationQuery.isPending ? '正在恢复上次会话…' : '当前会话不可写入，请恢复会话或选择另一个会话。'}<button onClick={() => void conversationQuery.refetch()}>重新读取会话</button></p>}
+          {!!conversationQuery.error && <DiagnosticError error={conversationQuery.error} />}
+          {!conversationUnavailable && <ChatWorkspace
+            key={`${chapterId ?? "project"}:${conversationId ?? 'default'}`}
             draftKey={`studio:chat-draft:${projectId}:${chapterId ?? "project"}`}
             chapterTitle={chapterId ? chapterNode?.title ?? "未命名章节" : "聊聊这个故事"}
             hasChapter={!!chapterId}
-            jobs={jobsQuery.data ?? []}
+            jobs={visibleJobs}
             projectId={projectId}
+            chapterId={chapterId}
+            conversationId={conversationId}
+            appliedStyles={selectedJobQuery.data ? (selectedJobQuery.data.context_snapshot.fragments ?? [])
+              .filter(fragment => ['style_profile', 'style_rule'].includes(fragment.source_type))
+              .map(fragment => styleView.data?.styles.find(style => style.id === fragment.source_id)?.name
+                ?? `${fragment.source_type === 'style_profile' ? '文风方案' : '文风规则'} ${fragment.source_id.slice(0, 8)}`) : undefined}
             selectedJobId={selectedJobSummary?.id}
             selectedJob={selectedJobQuery.data}
             onSelectJob={id => setJobSelection({ scope: jobScope, id })}
             onLoadOlder={jobsQuery.hasNextPage ? () => jobsQuery.fetchNextPage() : undefined}
             loadingOlder={jobsQuery.isFetchingNextPage}
             detailLoading={selectedJobQuery.isFetching}
-            detailError={selectedJobQuery.error?.message}
+            detailError={selectedJobQuery.error}
             onRetryDetail={() => { void selectedJobQuery.refetch(); }}
             running={working || jobsQuery.isLoading}
             sourceUnavailable={sourceUnavailable}
-            inputBudget={inputBudget.value}
+            inputBudget={displayedInputBudget}
+            inputBudgetAutomatic={!inputBudget.overridden}
+            onFollowModel={() => {
+              clearInputBudget(projectId);
+              setInputBudget({ value: '', overridden: false });
+            }}
             onInputBudgetChange={value => {
               setInputBudget({ value, overridden: true });
               saveInputBudget(projectId, value);
@@ -1606,7 +1858,7 @@ function ProjectStudio({
             disabledReason={
               sourceUnavailable ? "章节来源不可用，任务提交已禁用。"
                 : modelQuery.error ? "模型配置不可用，请打开设置检查。"
-                : !modelQuery.data ? "模型状态尚未确认" : undefined
+                : !modelQuery.data ? "模型状态尚未确认" : modelBudgetError || undefined
             }
             onSettings={() => navigate("settings")}
             onFeedback={async (reply, payload) => {
@@ -1631,7 +1883,7 @@ function ProjectStudio({
                 throw new Error("模型状态尚未确认，请检查模型设置。");
               if (dirty || editSession.manuscriptDirty || editSession.summaryDirty)
                 throw new Error("正文有未保存修改，请先保存，再交给 AI 处理。");
-              const budget = inputBudgetValue(inputBudget.value);
+              const budget = newTaskInputBudget();
               beginWorking();
               try {
                 if (chapterId && !chapterQuery.data) throw Error('请等正文加载完成。');
@@ -1641,6 +1893,7 @@ function ProjectStudio({
                   instructions,
                   token_budget: budget,
                   expected_revision: chapterQuery.data?.revision ?? null,
+                  ...(conversationId ? { conversation_id: conversationId } : {}),
                 };
                 await preflightWriting(command);
                 const item = prepareSubmission(projectId, chapterId ?? null, command);
@@ -1696,14 +1949,14 @@ function ProjectStudio({
                 endWorking();
               }
             }}
-          />
-          {pending.filter(item => !item.operation.startsWith('wiki') && item.chapterId === (chapterId ?? null)).map(item =>
+          />}
+          {pending.filter(item => !item.operation.startsWith('wiki') && !item.operation.startsWith('quality') && item.chapterId === (chapterId ?? null)).map(item =>
             <p role="status" key={item.idempotencyKey}>有一项请求尚未取得回执。
               <button disabled={working || sourceUnavailable} onClick={async () => {
                 beginWorking();
                 try { await deliver(item); } catch (e) {
                   if (!(item.operation === 'summary' && e instanceof ApiError && e.code === 'SUMMARY_TASK_ACTIVE'))
-                    setNotice(e instanceof Error ? e.message : String(e));
+                    setNotice(<DiagnosticError error={e} />);
                 }
                 finally { endWorking(); }
               }}>用原请求确认提交</button>

@@ -1,0 +1,9 @@
+.draft-recovery { min-width: 0; color: var(--ink-950); font: 13px/1.75 var(--font-ui); overflow-wrap: anywhere; }
+.draft-recovery:empty { display: none; }
+.draft-recovery > p { margin: 8px 0; }
+.draft-recovery article { padding: 10px 0; border-top: 1px solid var(--line-light); }
+.draft-recovery summary { cursor: pointer; min-height: 44px; padding: 10px 0; box-sizing: border-box; }
+.draft-recovery textarea { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; resize: vertical; border: 1px solid var(--control-border); border-radius: 10px; padding: 10px 12px; background: var(--paper-50); color: var(--ink-950); font: inherit; }
+.draft-recovery button { min-height: 44px; max-width: 100%; margin: 6px 8px 0 0; padding: 8px 12px; border-radius: 10px; white-space: normal; }
+.draft-recovery button:focus-visible, .draft-recovery summary:focus-visible, .draft-recovery textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.chat-workspace > .draft-recovery { max-height: 30vh; overflow-y: auto; flex-shrink: 0; padding-inline: clamp(12px, 3vw, 28px); scrollbar-width: thin; }

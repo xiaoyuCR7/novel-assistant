@@ -1,16 +1,21 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type ModelConfig } from "../../lib/api";
+import { DiagnosticError } from '../../components/DiagnosticError';
+import { ModelProfiles, modelConfigRevision } from './ModelProfiles';
 
 export function ModelSettingsForm({
   value,
   onSave,
   onTest,
+  onDirtyChange,
 }: {
   value: ModelConfig;
   onSave: (data: object) => Promise<ModelConfig>;
   onTest: () => Promise<unknown>;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
+  const [baselineRevision, setBaselineRevision] = useState(() => modelConfigRevision(value));
   const [mode, setMode] = useState(value.mode),
     [url, setUrl] = useState(value.base_url),
     [model, setModel] = useState(value.model);
@@ -19,7 +24,7 @@ export function ModelSettingsForm({
     [clear, setClear] = useState(false);
   const [busy, setBusy] = useState(false),
     [notice, setNotice] = useState(""),
-    [error, setError] = useState("");
+    [error, setError] = useState<unknown>(null);
   const [outputBudget, setOutputBudget] = useState(value.output_token_budget ?? 4096),
     [capacity, setCapacity] = useState(value.context_capacity ?? 32768),
     [deadline, setDeadline] = useState(value.deadline_seconds ?? 180),
@@ -37,6 +42,7 @@ export function ModelSettingsForm({
     thinkingMode !== (value.thinking_mode ?? 'provider_default') ||
     !!key ||
     clear;
+  useEffect(() => { onDirtyChange?.(changed); }, [changed, onDirtyChange]);
   async function act(test = false) {
     setBusy(true);
     setError("");
@@ -58,6 +64,7 @@ export function ModelSettingsForm({
           deadline_seconds: deadline,
           output_parameter: outputParameter,
           thinking_mode: thinkingMode,
+          ...(baselineRevision ? { expected_config_revision: baselineRevision } : {}),
         });
         setMode(saved.mode);
         setUrl(saved.base_url);
@@ -68,12 +75,13 @@ export function ModelSettingsForm({
         setDeadline(saved.deadline_seconds ?? 180);
         setOutputParameter(saved.output_parameter ?? 'max_tokens');
         setThinkingMode(saved.thinking_mode ?? 'provider_default');
+        setBaselineRevision(modelConfigRevision(saved));
         setKey("");
         setClear(false);
         setNotice("设置已保存，新请求将使用此配置。");
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -193,7 +201,7 @@ export function ModelSettingsForm({
           )}
           <details>
             <summary>生成限制与兼容性</summary>
-            <p className="subtle">输入资料预算在对话输入框旁按项目设置，每次新任务发送前仅本地估算必要输入；以下限制分别控制模型输出、总上下文容量与等待时间。预检不保证后续生成阶段可容纳，测试连接使用已保存的限制。</p>
+            <p className="subtle">新任务默认使用模型上下文容量减去输出预留，也可在对话输入框旁设置较小的省费上限。请按服务商规格填写模型容量，系统不会按模型名称猜测。发送前仅本地估算首阶段必要输入；预检不保证后续阶段可容纳，测试连接使用已保存的限制。</p>
             <label>最大输出 Token<input aria-label="最大输出 Token" type="number" min={256} max={65536} required
               value={outputBudget} onChange={e => setOutputBudget(Number(e.target.value))} /></label>
             <label>模型上下文容量<input aria-label="模型上下文容量" type="number" min={1024} max={1048576} required
@@ -255,11 +263,7 @@ export function ModelSettingsForm({
             {notice}
           </p>
         )}
-        {error && (
-          <p role="alert" className="error-note">
-            {error}
-          </p>
-        )}
+        {!!error && <DiagnosticError error={error} />}
       </form>
     </section>
   );
@@ -268,15 +272,17 @@ export function ModelSettingsForm({
 export function ModelSettings() {
   const cache = useQueryClient();
   const [repairing, setRepairing] = useState(false);
-  const [repairError, setRepairError] = useState("");
+  const [repairError, setRepairError] = useState<unknown>(null);
+  const [formDirty, setFormDirty] = useState(false);
+  const [formVersion, setFormVersion] = useState(0);
   const config = useQuery({
     queryKey: ["model-settings"],
     queryFn: api.modelSettings,
   });
   if (config.error && !config.data)
     return (
-      <p role="alert">
-        无法读取设置：{config.error.message}
+      <div>
+        <DiagnosticError error={config.error} message={`无法读取设置：${config.error.message}`} />
         <button onClick={() => config.refetch()}>重试</button>
         {config.error instanceof ApiError && config.error.code === "MODEL_CONFIG_UNAVAILABLE" && (
           <button
@@ -289,9 +295,10 @@ export function ModelSettings() {
                 const saved = await api.saveModelSettings({
                   mode: "demo", clear_api_key: true, repair_config: true,
                 });
+                await cache.cancelQueries({ queryKey: ["model-settings"], exact: true });
                 cache.setQueryData(["model-settings"], saved);
               } catch (e) {
-                setRepairError(e instanceof Error ? e.message : String(e));
+                setRepairError(e);
               } finally {
                 setRepairing(false);
               }
@@ -300,23 +307,33 @@ export function ModelSettings() {
             备份并重置配置
           </button>
         )}
-        {repairError}
-      </p>
+        {!!repairError && <DiagnosticError error={repairError} />}
+      </div>
     );
   if (!config.data) return <p>正在读取模型设置…</p>;
   return (
     <>
-    {config.error && <p role="alert">设置刷新失败，未保存输入已保留：{config.error.message}</p>}
+    {config.error && <DiagnosticError error={config.error} message={`设置刷新失败，未保存输入已保留：${config.error.message}`} />}
     <ModelSettingsForm
+      key={formVersion}
       value={config.data}
+      onDirtyChange={setFormDirty}
       onTest={api.testModel}
       onSave={async (data) => {
         const saved = await api.saveModelSettings(data);
+        await cache.cancelQueries({ queryKey: ["model-settings"], exact: true });
         cache.setQueryData(["model-settings"], saved);
+        await cache.cancelQueries({ queryKey: ["model-profiles"], exact: true });
+        await cache.invalidateQueries({ queryKey: ["model-profiles"] });
         await cache.invalidateQueries({ queryKey: ["health"] });
         return saved;
       }}
     />
+    {formDirty && <button type="button" onClick={() => { setFormVersion(value => value + 1); setFormDirty(false); }}>放弃未保存的模型设置</button>}
+    <ModelProfiles value={config.data} beforeApply={() => {
+      if (formDirty) throw Error('请先保存或放弃未保存的模型设置，再操作配置方案。');
+      return true;
+    }} onApplied={() => { setFormVersion(value => value + 1); setFormDirty(false); }} />
     </>
   );
 }

@@ -5,7 +5,10 @@ import { ContextPreview } from "./ContextPreview";
 import { JobStatus } from './JobStatus';
 import { JobPreview } from './JobPreview';
 import { FeedbackPanel, type FeedbackPayload } from "../feedback/FeedbackPanel";
-import { inputBudgetValue } from './inputBudget';
+import { inputBudgetValue, MAX_INPUT_BUDGET } from './inputBudget';
+import { loadLocalDrafts, saveLocalDraft, useLocalDraft, type LocalDraft } from '../../lib/draftStore';
+import { DraftRecoveryNotice } from '../../components/LocalDraftRecovery';
+import { DiagnosticError } from '../../components/DiagnosticError';
 
 const actions = [
   ["chat", "讨论", "一起讨论这个故事的下一步。"],
@@ -14,6 +17,19 @@ const actions = [
   ["rewrite", "改写", "保留核心事件，优化本章叙述与节奏。"],
   ["review", "检查", "检查本章与前文、人物设定是否一致。"],
 ] as const;
+
+// Component navigation shares this page's draft; a new browser document must ask to recover.
+type NavigationDraft = { message: string; task: string; draft: LocalDraft | null; persisted: boolean };
+const navigationDrafts = new Map<string, NavigationDraft>();
+if (typeof window !== 'undefined') window.addEventListener('pagehide', () => navigationDrafts.clear());
+function readNavigationDraft(scope?: string) {
+  const value = scope ? navigationDrafts.get(scope) : undefined;
+  if (value?.persisted && value.draft) {
+    const stored = loadLocalDrafts(value.draft.projectId, value.draft.chapterId, 'chat', value.draft.conversationId);
+    if (!stored.unavailable && !stored.drafts.some(draft => draft.id === value.draft!.id)) return undefined;
+  }
+  return value;
+}
 
 function outputText(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -57,6 +73,9 @@ export function ChatWorkspace({
   replaceDisabled,
   sourceUnavailable = false,
   projectId,
+  chapterId,
+  conversationId,
+  appliedStyles,
   selectedJobId,
   selectedJob,
   onSelectJob,
@@ -67,21 +86,28 @@ export function ChatWorkspace({
   onRetryDetail,
   inputBudget,
   onInputBudgetChange,
+  inputBudgetAutomatic,
+  onFollowModel,
 }: {
   chapterTitle: string;
   hasChapter: boolean;
   jobs: JobSummary[];
   projectId?: string;
+  chapterId?: string;
+  conversationId?: string;
+  appliedStyles?: string[];
   selectedJobId?: string;
   selectedJob?: AIJob;
   onSelectJob?: (id: string) => void;
   onLoadOlder?: () => Promise<unknown>;
   loadingOlder?: boolean;
   detailLoading?: boolean;
-  detailError?: string;
+  detailError?: unknown;
   onRetryDetail?: () => void;
   inputBudget?: string;
   onInputBudgetChange?: (value: string) => void;
+  inputBudgetAutomatic?: boolean;
+  onFollowModel?: () => void;
   running: boolean;
   disabledReason?: string;
   draftKey?: string;
@@ -97,26 +123,38 @@ export function ChatWorkspace({
   replaceDisabled?: boolean;
   sourceUnavailable?: boolean;
 }) {
-  const [message, setMessage] = useState(() => {
-    try {
-      return draftKey ? (sessionStorage.getItem(draftKey) ?? "").slice(0, 16000) : "";
-    } catch {
-      return "";
-    }
-  }),
-    [task, setTask] = useState("chat"),
-    [error, setError] = useState("");
+  const navigationScope = projectId ? JSON.stringify([projectId, chapterId ?? null, conversationId ?? null]) : draftKey;
+  const [navigationDraft] = useState(() => readNavigationDraft(navigationScope));
+  const [message, setMessage] = useState(navigationDraft?.message ?? ''),
+    [task, setTask] = useState(navigationDraft?.task ?? 'chat'),
+    [error, setError] = useState<unknown>(null);
+  const recovery = useLocalDraft({ projectId, chapterId: chapterId ?? null, conversationId, title: chapterTitle,
+    kind: 'chat', initialDraft: navigationDraft?.draft ?? undefined, values: { message, task }, dirty: !!message });
+  const navigationState = useRef({ message, task, snapshot: recovery.snapshot, persisted: recovery.status === 'saved' });
+  navigationState.current = { message, task, snapshot: recovery.snapshot, persisted: recovery.status === 'saved' };
+  useEffect(() => {
+    if (!navigationScope) return;
+    navigationDrafts.delete(navigationScope);
+    return () => {
+      const current = navigationState.current;
+      if (current.message) navigationDrafts.set(navigationScope, { message: current.message, task: current.task, draft: current.snapshot(), persisted: current.persisted });
+      else navigationDrafts.delete(navigationScope);
+    };
+  }, [navigationScope]);
   const tail = useRef<HTMLDivElement>(null);
   const action = actions.find((item) => item[0] === task)!;
   useEffect(() => {
-    if (!draftKey) return;
+    if (!draftKey || !projectId || conversationId) return;
     try {
-      if (message) sessionStorage.setItem(draftKey, message);
-      else sessionStorage.removeItem(draftKey);
+      const legacy = sessionStorage.getItem(draftKey);
+      if (!legacy) return;
+      const existing = loadLocalDrafts(projectId, chapterId ?? null, 'chat').drafts.some(d => d.values.message === legacy);
+      if (existing || saveLocalDraft({ version: 1, id: crypto.randomUUID(), projectId, chapterId: chapterId ?? null,
+        kind: 'chat', baseRevision: null, updatedAt: new Date().toISOString(), values: { message: legacy, task: 'chat' } })) sessionStorage.removeItem(draftKey);
     } catch {
       /* Keep the in-memory draft when browser storage is unavailable. */
     }
-  }, [draftKey, message]);
+  }, [draftKey, projectId, chapterId, conversationId]);
   useEffect(() => {
     if (jobs.length || running) tail.current?.scrollIntoView?.({ block: "end" });
   }, [jobs.length, running]);
@@ -130,7 +168,7 @@ export function ChatWorkspace({
       await onSend(task, message.trim() || action[2]);
       setMessage(current => current === submitted ? '' : current);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "发送失败，请重试。");
+      setError(e instanceof Error ? e : Error('发送失败，请重试。'));
     }
   }
   return (
@@ -145,9 +183,15 @@ export function ChatWorkspace({
           查看正文
         </button>
       </header>
+      <DraftRecoveryNotice drafts={recovery.candidates} status={recovery.status} onDiscard={recovery.discard}
+        onRestore={saved => {
+          if (message && !window.confirm('用恢复稿替换当前未发送消息？当前草稿仍保留在本机恢复箱。')) return;
+          recovery.adopt(saved); setMessage(String(saved.values.message)); setTask(String(saved.values.task));
+        }} />
+      {appliedStyles !== undefined && <p className="subtle">本次采用文风：{appliedStyles.length ? appliedStyles.join('、') : '无文风来源记录'}</p>}
       <div className={`chat-scroll ${jobs.length ? "" : "is-empty"}`}>
         {onLoadOlder && <button type="button" disabled={loadingOlder} onClick={() => {
-          setError(''); void onLoadOlder().catch(e => setError(e instanceof Error ? e.message : String(e)));
+          setError(''); void onLoadOlder().catch(e => setError(e));
         }}>{loadingOlder ? '正在加载…' : '加载更早对话'}</button>}
         {!jobs.length && (
           <div className="chat-welcome">
@@ -194,7 +238,7 @@ export function ChatWorkspace({
             <div className="author-message">
               <span className="message-label">你</span>
               <p>
-                {job.instructions ||
+                {(detail?.instructions ?? job.instructions) ||
                   actions.find((item) => item[0] === job.task_type)?.[2] ||
                   "创作请求"}
               </p>
@@ -208,7 +252,8 @@ export function ChatWorkspace({
                     "写作"}
                 </span>
               </span>
-              {job.status !== 'succeeded' && <JobStatus job={job}
+              {job.inherited && <p className="subtle">分支继承记录 · 只读</p>}
+              {job.status !== 'succeeded' && !job.inherited && <JobStatus job={job}
                 sourceUnavailable={sourceUnavailable}
                 onCancel={onCancel ? () => onCancel(job) : undefined}
                 onResume={onResume ? confirm => onResume(job, confirm) : undefined}
@@ -232,10 +277,10 @@ export function ChatWorkspace({
                 disabled={detailLoading && selectedJobId === job.id} onClick={() => onSelectJob(job.id)}>
                 {detailLoading && selectedJobId === job.id ? '正在读取完整回复…' : '查看完整回复与参考'}
               </button>}
-              {selectedJobId === job.id && detailError && <p role="alert" className="error-note">
-                完整回复读取失败：{detailError}<button type="button" onClick={onRetryDetail}>重试读取</button>
-              </p>}
-              {detail?.status === 'succeeded' && detail.result.candidate_text && (
+              {selectedJobId === job.id && !!detailError && <div className="error-note">
+                <DiagnosticError error={detailError} /><button type="button" onClick={onRetryDetail}>重试读取</button>
+              </div>}
+              {!job.inherited && detail?.status === 'succeeded' && detail.result.candidate_text && (
                 <div className="candidate-actions">
                   <span>
                     {job.accepted_version_id
@@ -249,7 +294,7 @@ export function ChatWorkspace({
                       try {
                         await onAccept(job.id);
                       } catch (e) {
-                        setError(e instanceof Error ? e.message : String(e));
+                        setError(e);
                       }
                     }}
                   >
@@ -268,7 +313,7 @@ export function ChatWorkspace({
                   <ContextPreview context={detail!.context_snapshot} />
                 </details>
               )}
-              {onFeedback && detail && job.status === "succeeded" && (
+              {!job.inherited && onFeedback && detail && job.status === "succeeded" && (
                 <details className="chat-references">
                   <summary>评价这次回复</summary>
                   <FeedbackPanel
@@ -312,12 +357,14 @@ export function ChatWorkspace({
             </button>
           ))}
         </div>
-          {onInputBudgetChange && <label className="composer-budget" title="本项目新任务的输入预算；独立于模型输出与总容量。发送时仅本地估算首阶段必要输入，不调用模型；后续生成阶段仍可能超限。">
+          {onInputBudgetChange && <label className="composer-budget" title="新任务默认使用模型容量减去输出预留，可填写较小的省费上限。发送时仅本地估算首阶段必要输入，不调用模型；后续阶段仍可能超限。">
             输入预算
-            <input aria-label="输入预算 Token" type="number" min={256} max={200000} step={1}
+            <input aria-label="输入预算 Token" type="number" min={256} max={MAX_INPUT_BUDGET} step={1}
               required value={inputBudget} onChange={event => onInputBudgetChange(event.target.value)} />
-            <span>Token</span>
+            <span>{inputBudgetAutomatic ? 'Token · 自动' : 'Token · 省费上限'}</span>
           </label>}
+          {onFollowModel && <button type="button" className="text-action" aria-pressed={inputBudgetAutomatic}
+            onClick={onFollowModel}>跟随模型</button>}
         </div>
         <textarea
           aria-label="给 AI 的消息"
@@ -353,11 +400,7 @@ export function ChatWorkspace({
         {disabledReason && (
           <p role="status" className="subtle">{disabledReason}</p>
         )}
-        {error && (
-          <p className="error-note" role="alert">
-            {error}
-          </p>
-        )}
+        {!!error && <DiagnosticError error={error} />}
       </form>
     </section>
   );

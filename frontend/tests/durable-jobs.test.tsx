@@ -14,6 +14,13 @@ it('shows the final review stage with an author-facing Chinese label', () => {
   expect(screen.getByRole('status')).not.toHaveTextContent('final_review');
 });
 
+it('explains conversation compaction while a chat is running', () => {
+  render(<JobStatus job={{ id: 'memory-job', status: 'running', task_type: 'chat',
+    current_stage: 'conversation.compact.1' }} />);
+  expect(screen.getByRole('status')).toHaveTextContent('正在处理 · 整理较早对话（第2部分）');
+  expect(screen.getByRole('status')).not.toHaveTextContent('conversation.compact');
+});
+
 it.each([
   ['chapter_summary.chunk.0', '分段内容检查（第1段）'],
   ['chapter_summary.merge.1.2', '汇总内容检查（第2轮/第3组）'],

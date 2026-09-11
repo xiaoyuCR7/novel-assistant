@@ -17,7 +17,9 @@ class RequestLimitMiddleware:
     async def __call__(self, scope, receive, send):
         if scope['type'] != 'http' or scope['method'] not in {'POST', 'PUT', 'PATCH'}:
             return await self.app(scope, receive, send)
-        if scope['method'] == 'POST' and scope['path'] == '/api/v1/imports':
+        if scope['method'] == 'POST' and scope['path'] in {
+            '/api/v1/imports', '/api/v1/projects/backup/preview', '/api/v1/projects/backup/restore',
+        }:
             return await self._stream_import(scope, receive, send)
         headers = dict(scope['headers'])
         try:

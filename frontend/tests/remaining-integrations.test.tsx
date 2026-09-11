@@ -54,7 +54,7 @@ it('saves model generation limits and distinguishes them from retrieval input bu
   await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({
     output_token_budget: 8192, context_capacity: 65536, deadline_seconds: 300,
     output_parameter: 'max_completion_tokens', thinking_mode: 'disabled' })));
-  expect(screen.getByText(/输入资料预算/)).toBeInTheDocument();
+  expect(screen.getByText(/默认使用模型上下文容量减去输出预留/)).toHaveTextContent('按服务商规格填写模型容量，系统不会按模型名称猜测');
 });
 
 it.each(['https://example.com/v1/', 'https://example.com/v1/chat/completions'])('adopts saved canonical model settings without remounting the form (%s)', async (baseUrl) => {

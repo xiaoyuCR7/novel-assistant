@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -326,6 +327,64 @@ class ProjectVaultRegistry:
     def create_project(self, payload: ProjectCreate) -> dict:
         project_id = new_id()
         return self._create_vault(payload, project_id, lambda _session, _root: None)
+
+    def restore_project(self, project_id: str, archive_hash: str, populate) -> dict:
+        """Publish an isolated, checked backup without replacing an existing project."""
+        self._validate_id(project_id)
+        projects_root = self.root / "projects"
+        projects_root.mkdir(exist_ok=True)
+        if (_path_is_reparse_point(projects_root) or projects_root.resolve() != projects_root
+                or projects_root.parent != self.root):
+            raise RuntimeError("UNSAFE_PROJECTS_ROOT")
+        with _ProjectCreationLock(projects_root, project_id), self._lock:
+            if self._registration_row(project_id) is not None:
+                raise HTTPException(409, detail={"code": "BACKUP_PROJECT_EXISTS",
+                                                "message": "同 ID 项目已存在，未覆盖任何内容。"})
+            final_root = projects_root / project_id
+            marker_name = ".restore-receipt.json"
+            self._cleanup_stale_creating(projects_root, project_id)
+            if final_root.exists() or _path_is_reparse_point(final_root):
+                # A crash after atomic rename but before registry commit is recoverable
+                # only with the exact same validated archive, never by overwriting.
+                if (_path_is_reparse_point(final_root) or final_root.resolve() != final_root
+                        or not (final_root / marker_name).is_file()
+                        or _path_is_reparse_point(final_root / marker_name)):
+                    raise HTTPException(409, detail={"code": "BACKUP_PROJECT_EXISTS"})
+                receipt = json.loads((final_root / marker_name).read_text(encoding="utf-8"))
+                if receipt.get("archive_hash") != archive_hash or receipt.get("id") != project_id:
+                    raise HTTPException(409, detail={"code": "BACKUP_PROJECT_EXISTS"})
+                result, database = self._validate_final_vault(
+                    final_root, project_id, lambda _session, _root: None,
+                )
+                try:
+                    self._register_or_reconcile(project_id, result["title"])
+                finally:
+                    database.dispose()
+                return result
+            token = uuid4().hex
+            temporary = projects_root / f".creating-{project_id}-{token}"
+            renamed = False
+            try:
+                temporary.mkdir()
+                self._verify_creating_path(projects_root, temporary, project_id, token)
+                result = populate(temporary)
+                (temporary / marker_name).write_text(json.dumps({
+                    "id": project_id, "archive_hash": archive_hash,
+                }), encoding="utf-8")
+                _fsync_directory_chain(temporary, projects_root)
+                os.replace(temporary, final_root)
+                renamed = True
+                _fsync_directory(projects_root)
+                self._register_or_reconcile(project_id, result["title"])
+                return result
+            except BaseException:
+                if renamed:
+                    if self._registration_row(project_id) is None:
+                        self._remove_final_vault(projects_root, final_root, project_id)
+                elif temporary.exists():
+                    self._verify_creating_path(projects_root, temporary, project_id, token)
+                    shutil.rmtree(temporary)
+                raise
 
     def _create_vault(
         self,

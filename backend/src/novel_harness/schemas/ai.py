@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_serializer, model_validator
 
 
 class AIJobCreate(BaseModel):
@@ -22,10 +22,18 @@ class AIJobCreate(BaseModel):
         "scene_description",
     ]
     instructions: str = Field(default="", max_length=16000)
-    token_budget: int = Field(default=12_000, ge=256, le=200_000)
+    token_budget: int = Field(default=12_000, ge=256, le=1_048_576)
     expected_revision: int | None = Field(default=None, ge=1)
     replaces_job_id: str | None = Field(default=None, min_length=1, max_length=64)
     confirm_unknown: bool = False
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_command(self, handler):
+        result = handler(self)
+        if self.conversation_id is None:
+            result.pop("conversation_id", None)
+        return result
 
     @model_validator(mode="after")
     def scope_revision(self):

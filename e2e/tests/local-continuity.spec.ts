@@ -116,7 +116,7 @@ test('chat persists across reload and settings safely configure an optional API'
   await page.getByLabel('模型名称').fill('test-model');
   await page.getByLabel('API Key').fill('fake-e2e-key-not-real');
   await expect(page.getByRole('button',{name:'保存设置'})).toBeDisabled();
-  await page.getByRole('checkbox').check();
+  await page.getByRole('checkbox', { name: '允许将当前任务的对话、正文及相关资料发送给此 API 服务商。可能产生费用。', exact: true }).check();
   await page.getByRole('button',{name:'保存设置'}).click();
   await expect(page.getByText('设置已保存，新请求将使用此配置。')).toBeVisible();
   await expect(page.getByLabel('API Key')).toHaveValue('');

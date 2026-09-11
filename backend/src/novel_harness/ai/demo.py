@@ -30,12 +30,23 @@ class DemoProvider:
                 "再让角色面对一个必须做出的选择。连接真实模型后，"
                 "我会结合当前小说资料和对话继续讨论。"
             )
+        elif request.task == "conversation_summary":
+            import json
+
+            data = json.loads(request.user_prompt)
+            text = "离线演示记忆摘录（非语义总结）：" + data["transcript_part"][:
+                min(120, request.output_token_budget // 4)
+            ]
         elif request.task == "scene_description":
             text = (
                 "雾潮退到第七根系缆柱时，码头才从水声里显出轮廓。"
                 "湿冷的木板贴着鞋底吱响，远处每一次铁链碰撞，"
                 "都像有人在黑暗中试着打开一扇看不见的门。"
             )
+        elif request.task == "quality_rewrite":
+            import json
+
+            text = json.loads(request.user_prompt)["manuscript"]
         elif request.task == "rewrite":
             text = (
                 "雾从钟楼背后落下来时，林渡正把最后一封信压进邮袋。"
@@ -56,7 +67,18 @@ class DemoProvider:
     def generate_structured(
         self, request: AITextRequest, schema: dict[str, Any]
     ) -> StructuredResult:
-        if request.task == 'wiki_summary':
+        if request.task in {"quality_review", "quality_final_review"}:
+            data = {
+                "scores": {
+                    key: 85
+                    for key in ("readability", "engagement", "pacing", "clarity", "consistency")
+                },
+                "summary": "离线演示质量报告，用于验证流程，不代表真实文学评分。",
+                "issues": [],
+                "next_guidance": "承接本章结尾继续推进。",
+                "preserves_story": True,
+            }
+        elif request.task == 'wiki_summary':
             import json
             source = json.loads(request.user_prompt)['sources'][0]
             data = {'claims':[{'text':'离线演示摘录：'+source['content'][:120],

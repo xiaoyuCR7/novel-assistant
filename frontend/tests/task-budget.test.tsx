@@ -5,11 +5,12 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
 import { emptyLibraryPage } from './library-fixtures';
 import { pendingSubmissions } from '../src/features/ai/pendingSubmission';
-import { inputBudgetValue, readInputBudget, saveInputBudget } from '../src/features/ai/inputBudget';
+import { clearInputBudget, inputBudgetValue, readInputBudget, saveInputBudget } from '../src/features/ai/inputBudget';
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); sessionStorage.clear(); });
 
-function studio(options: { canFit?: boolean; defer?: boolean; malformed?: boolean; lostReceipt?: boolean; summary?: boolean; staleRevision?: boolean } = {}) {
+function studio(options: { canFit?: boolean; defer?: boolean; malformed?: boolean; lostReceipt?: boolean; summary?: boolean; staleRevision?: boolean;
+  limits?: { context_capacity?: number; output_token_budget?: number } } = {}) {
   const project = { id: 'budget-p', title: 'Novel', premise: '', genre: '', target_words: 1000, daily_goal: 100, status: 'active' };
   const chapter = { id: 'budget-c', kind: 'chapter', title: 'Chapter', status: 'drafting', order_index: 1, parent_id: null };
   const checks: Record<string, unknown>[] = [], posts: { data: Record<string, unknown>; key: string | null }[] = [];
@@ -22,9 +23,10 @@ function studio(options: { canFit?: boolean; defer?: boolean; malformed?: boolea
     if (url.endsWith('/preflight')) {
       const command = JSON.parse(String(init?.body)); checks.push(command);
       if (options.staleRevision) return new Response(JSON.stringify({ detail: { code: 'SOURCE_CHANGED' } }), { status: 409 });
-      const result = options.malformed ? {} : { required_input_tokens: options.canFit === false ? 15000 : 1000,
-        token_budget: command.token_budget, output_token_budget: 4096, context_capacity: 131072,
-        effective_input_limit: Math.min(command.token_budget, 126976), can_fit: options.canFit !== false,
+      const capacity = options.limits?.context_capacity ?? 131072, output = options.limits?.output_token_budget ?? 4096;
+      const result = options.malformed ? {} : { required_input_tokens: options.canFit === false ? 200000 : 1000,
+        token_budget: command.token_budget, output_token_budget: output, context_capacity: capacity,
+        effective_input_limit: Math.min(command.token_budget, capacity - output), can_fit: options.canFit !== false,
         estimated: true, scope: 'first-stage-hard-only', message: '仅估算首阶段硬输入，后续生成阶段不保证可容纳。' };
       if (options.defer) return new Promise<Response>(resolve => { release = () => resolve(response(result)); });
       return response(result);
@@ -43,7 +45,7 @@ function studio(options: { canFit?: boolean; defer?: boolean; malformed?: boolea
       version_id: 'v1', title: 'Chapter', recap: 'saved recap', details: {}, origin: 'ai_generated', provider: 'demo',
       status: 'valid', revision: 1, content_hash: 'hash' } : null);
     if (url.endsWith('/settings/model')) return response({ mode: 'demo', model: '', base_url: '', has_api_key: false,
-      external_consent: false, output_token_budget: 4096, context_capacity: 131072 });
+      external_consent: false, ...(options.limits ?? { output_token_budget: 4096, context_capacity: 131072 }) });
     if (url.endsWith('/rag/health')) return response({ vectors: 'disabled', documents: 0 });
     if (url.endsWith('/progress')) return response({ current_words: 0, target_words: 1000, completion_ratio: 0, chapter_count: 1, completed_chapters: 0, daily_goal: 100 });
     return response([]);
@@ -63,7 +65,7 @@ function studio(options: { canFit?: boolean; defer?: boolean; malformed?: boolea
 it('uses the chosen per-project input budget for both preflight and submission', async () => {
   const app = studio();
   const budget = await screen.findByLabelText('输入预算 Token');
-  expect(budget).toHaveValue(12000);
+  expect(budget).toHaveValue(126976);
   fireEvent.change(budget, { target: { value: '20000' } });
   expect(app.checks).toHaveLength(0);
   fireEvent.change(screen.getByLabelText('给 AI 的消息'), { target: { value: 'continue with care' } });
@@ -76,14 +78,14 @@ it('uses the chosen per-project input budget for both preflight and submission',
   expect(screen.getByLabelText('给 AI 的消息')).toHaveValue('');
 });
 
-it.each(['', '255', '200001', '12000.5'])('blocks invalid input budget %s even with Enter and form submit', async value => {
+it.each(['', '255', '1048577', '12000.5'])('blocks invalid input budget %s even with Enter and form submit', async value => {
   const app = studio();
   fireEvent.change(await screen.findByLabelText('输入预算 Token'), { target: { value } });
   const message = screen.getByLabelText('给 AI 的消息');
   fireEvent.change(message, { target: { value: 'retain me' } });
   fireEvent.keyDown(message, { key: 'Enter', code: 'Enter' });
   fireEvent.submit(message.closest('form')!);
-  expect(await screen.findByText(/256.*200000.*整数/)).toBeVisible();
+  expect(await screen.findByText(/256.*1048576.*整数/)).toBeVisible();
   expect(message).toHaveValue('retain me');
   expect(app.checks).toHaveLength(0); expect(app.posts).toHaveLength(0);
 });
@@ -93,7 +95,7 @@ it.each([{ canFit: false }, { malformed: true }])('retains prompt and creates no
   const message = await screen.findByLabelText('给 AI 的消息');
   fireEvent.change(message, { target: { value: 'retain me' } });
   await userEvent.click(screen.getByRole('button', { name: '发送消息' }));
-  expect(await screen.findByRole('alert')).toHaveTextContent(options.canFit === false ? /15000.*12000.*4096.*131072/ : /预检/);
+  expect(await screen.findByRole('alert')).toHaveTextContent(options.canFit === false ? /200000.*126976.*4096.*131072/ : /预检/);
   expect(message).toHaveValue('retain me'); expect(app.posts).toHaveLength(0);
     expect(pendingSubmissions('budget-p')).toEqual([]);
 });
@@ -182,6 +184,55 @@ it('persists only valid per-project budgets and survives unavailable browser sto
   saveInputBudget('session-p', '24000');
   expect(readInputBudget('session-p')).toBe('24000');
   expect(readInputBudget('session-other')).toBeUndefined();
-  for (const value of ['NaN', 'Infinity', '256.5', '255', '200001', '']) expect(() => inputBudgetValue(value)).toThrow();
-  expect(inputBudgetValue('256')).toBe(256); expect(inputBudgetValue('200000')).toBe(200000);
+  vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw Error('blocked'); });
+  clearInputBudget('session-p');
+  expect(readInputBudget('session-p')).toBeUndefined();
+  for (const value of ['NaN', 'Infinity', '256.5', '255', '1048577', '']) expect(() => inputBudgetValue(value)).toThrow();
+  expect(inputBudgetValue('256')).toBe(256); expect(inputBudgetValue('1048576')).toBe(1048576);
+});
+
+it('freezes model capacity minus output reservation in new commands without the old 200k ceiling', async () => {
+  const app = studio({ limits: { context_capacity: 1048576, output_token_budget: 8192 } });
+  expect(await screen.findByLabelText('输入预算 Token')).toHaveValue(1040384);
+  await userEvent.click(screen.getByRole('button', { name: '发送消息' }));
+  await waitFor(() => expect(app.posts).toHaveLength(1));
+  expect(app.checks[0].token_budget).toBe(1040384);
+  expect(app.posts[0].data).toEqual(app.checks[0]);
+  expect(localStorage.getItem('studio:input-budget:budget-p')).toBeNull();
+});
+
+it('keeps a saved cost limit until the author switches back to following model settings', async () => {
+  saveInputBudget('budget-p', '12000');
+  const app = studio();
+  expect(await screen.findByLabelText('输入预算 Token')).toHaveValue(12000);
+  await userEvent.click(screen.getByRole('button', { name: '跟随模型' }));
+  expect(screen.getByLabelText('输入预算 Token')).toHaveValue(126976);
+  expect(readInputBudget('budget-p')).toBeUndefined();
+  act(() => { app.client.setQueryData(['model-settings'], { mode: 'demo', model: '', context_capacity: 65536, output_token_budget: 8192 }); });
+  await waitFor(() => expect(screen.getByLabelText('输入预算 Token')).toHaveValue(57344));
+  fireEvent.change(screen.getByLabelText('输入预算 Token'), { target: { value: '16000' } });
+  act(() => { app.client.setQueryData(['model-settings'], { mode: 'demo', model: '', context_capacity: 32768, output_token_budget: 4096 }); });
+  expect(screen.getByLabelText('输入预算 Token')).toHaveValue(16000);
+});
+
+it.each([{}, { context_capacity: 4096, output_token_budget: 4096 }, { context_capacity: 4096, output_token_budget: 4000 }])('does not guess an automatic budget or submit for invalid configured limits %j', async limits => {
+  const app = studio({ limits });
+  await screen.findByLabelText('给 AI 的消息');
+  expect(screen.getByRole('button', { name: '发送消息' })).toBeDisabled();
+  fireEvent.submit(screen.getByLabelText('给 AI 的消息').closest('form')!);
+  expect(app.checks).toHaveLength(0); expect(app.posts).toHaveLength(0);
+  expect(screen.getByLabelText('输入预算 Token')).not.toHaveValue(12000);
+});
+
+it('keeps pending command values and keys frozen when model capacity changes before retry', async () => {
+  const app = studio({ lostReceipt: true });
+  await screen.findByLabelText('给 AI 的消息');
+  await userEvent.click(screen.getByRole('button', { name: '发送消息' }));
+  await screen.findByText('lost receipt');
+  act(() => { app.client.setQueryData(['model-settings'], { mode: 'demo', model: '', context_capacity: 65536, output_token_budget: 8192 }); });
+  await waitFor(() => expect(screen.getByLabelText('输入预算 Token')).toHaveValue(57344));
+  await userEvent.click(screen.getByRole('button', { name: '用原请求确认提交' }));
+  await waitFor(() => expect(app.posts).toHaveLength(2));
+  expect(app.checks).toHaveLength(1); expect(app.posts[1]).toEqual(app.posts[0]);
+  expect(app.posts[0].data.token_budget).toBe(126976);
 });

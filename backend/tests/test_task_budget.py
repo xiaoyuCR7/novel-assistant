@@ -110,6 +110,7 @@ def test_preflight_matches_actual_first_stage_including_schema_and_prefix(
             "token_budget": 20000,
             "execution_limits": ExecutionLimits(context_capacity=131072).model_dump(),
             "fragments": [asdict(f) for f in packet.fragments if f.hard],
+            "conversation": {"version": 1},
         }
         request = CreationPipeline(None)._initial_request(
             task, command["instructions"], document.contract, snapshot
@@ -127,6 +128,48 @@ def test_preflight_matches_actual_first_stage_including_schema_and_prefix(
                 next(f["content"] for f in fragments if f["source_type"] == "current_draft")
                 == "风" * 7000
             )
+
+
+@pytest.mark.parametrize("limit", ["input", "context"])
+def test_preflight_counts_continuation_policy_at_the_exact_new_task_window_boundary(
+    client, project, seeded_chapter, limit
+):
+    base, command = prepared(client, project, seeded_chapter, "chat", 20000)
+    database = client.app.state.vault_registry.require(project["id"]).database
+    with database.job_session_scope() as session:
+        document = session.get(ChapterDocument, seeded_chapter)
+        hard, _, _ = collect_task_hard_context(
+            session, session.get(Project, project["id"]), seeded_chapter,
+            document.contract, "chat", command["instructions"],
+        )
+        snapshot = {
+            "token_budget": 20000,
+            "execution_limits": ExecutionLimits(context_capacity=131072).model_dump(),
+            "fragments": [asdict(fragment) for fragment in hard],
+        }
+        pipeline = CreationPipeline(None)
+        legacy_tokens = pipeline.estimate_initial_input(
+            "chat", command["instructions"], document.contract, snapshot
+        )
+        expected = pipeline.estimate_initial_input(
+            "chat", command["instructions"], document.contract,
+            {**snapshot, "conversation": {"version": 1}},
+        )
+    assert expected > legacy_tokens
+    if limit == "input":
+        command["token_budget"] = expected - 1
+    else:
+        configured = client.put("/api/v1/settings/model", json={
+            "mode": "demo", "context_capacity": expected - 1 + 4096,
+            "output_token_budget": 4096,
+        })
+        assert configured.status_code == 200
+    response = client.post(base + "/ai/jobs/preflight", json=command)
+    assert response.status_code == 200, response.text
+    report = response.json()
+    assert report["effective_input_limit"] == expected - 1
+    assert report["required_input_tokens"] == expected
+    assert report["can_fit"] is False
 
 
 def test_capacity_reserves_output_and_report_discloses_no_private_content(

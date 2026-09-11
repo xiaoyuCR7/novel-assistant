@@ -116,6 +116,7 @@ export interface StyleProfile {
   revision: number;
   name: string;
   is_active: boolean;
+  is_pinned?: boolean;
   config: Record<string, unknown>;
 }
 

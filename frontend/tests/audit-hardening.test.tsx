@@ -160,7 +160,7 @@ function studio(options: { candidate?: boolean; failedSummary?: boolean; evidenc
       }
       return response(summaryDeleted ? null : { ...summary, ledger_pending: ledgerPending });
     }
-    if (url.endsWith("/settings/model")) return response({ mode: "demo", model: "", base_url: "", has_api_key: false, external_consent: false });
+    if (url.endsWith("/settings/model")) return response({ mode: "demo", model: "", base_url: "", has_api_key: false, external_consent: false, context_capacity: 32768, output_token_budget: 4096 });
     if (url.endsWith("/rag/health")) return response({ vectors: "disabled", documents: 0, ledger_pending: ledgerPending });
     if (url.endsWith("/rag/repair-ledger") || url.endsWith('/summary/repair-ledger')) {
       ledgerRepairs.push(url);

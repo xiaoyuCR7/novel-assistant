@@ -219,7 +219,10 @@ it('keeps late history reconciliation inside its original project cache', async 
 
 it('preserves edited settings during a failed background refresh', async () => {
   let failed = false;
-  vi.stubGlobal('fetch', vi.fn(async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).endsWith('/settings/model/profiles')) {
+      return response({ items: [], current_config_revision: 'a'.repeat(64) });
+    }
     if (failed) throw new Error('offline');
     return response({ mode: 'demo', base_url: '', model: '', has_api_key: false, external_consent: false });
   }));

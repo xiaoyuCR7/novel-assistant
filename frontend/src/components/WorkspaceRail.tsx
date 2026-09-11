@@ -1,6 +1,7 @@
 import { Icon } from "./Icon";
 export const views = [
   ["write", "章节写作", "write"],
+  ["quality", "质量优化", "spark"],
   ["library", "素材库", "book"],
   ["wiki", "小说 Wiki", "book"],
   ["ideas", "灵感匣", "idea"],
@@ -38,9 +39,9 @@ export function WorkspaceRail({
           aria-current={
             (
               id === "ai"
-                ? ["ai", "write", "preparation"].includes(view)
+                ? ["ai", "write", "quality", "preparation"].includes(view)
                 : id === "library"
-                  ? !["ai", "write", "preparation", "settings"].includes(view)
+                  ? !["ai", "write", "quality", "preparation", "settings"].includes(view)
                   : view === id
             )
               ? "page"

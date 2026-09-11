@@ -64,7 +64,7 @@ function studio(options: { summary?: boolean; unknown?: boolean; published?: boo
     }
     if (url.endsWith('/ai/jobs/linked-job')) return response(jobs.at(-1));
     if (url.endsWith('/summary')) return response(null);
-    if (url.endsWith('/settings/model')) return response({ mode: 'demo', model: '', base_url: '', has_api_key: false, external_consent: false });
+    if (url.endsWith('/settings/model')) return response({ mode: 'demo', model: '', base_url: '', has_api_key: false, external_consent: false, context_capacity: 32768, output_token_budget: 4096 });
     if (url.endsWith('/rag/health')) return response({ vectors: 'disabled', documents: 0 });
     if (url.endsWith('/progress')) return response({ current_words: 0, target_words: 1000, completion_ratio: 0, chapter_count: 1, completed_chapters: 0, daily_goal: 100 });
     return response([]);
@@ -94,10 +94,10 @@ it('explicitly creates a linked new job from full instructions and current saved
   await userEvent.click(await replacementButton());
   await waitFor(() => expect(app.posts).toHaveLength(1));
   expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/当前.*设置|当前.*模型/));
-  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('8192'));
+  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('28672'));
   expect(app.posts[0]).toMatchObject({ url: '/api/v1/projects/replace-p/ai/jobs', data: {
     project_id: 'replace-p', chapter_id: 'replace-c', task_type: 'rewrite', instructions: app.instructions,
-    expected_revision: 9, token_budget: 8192, replaces_job_id: 'source-job', confirm_unknown: false,
+    expected_revision: 9, token_budget: 28672, replaces_job_id: 'source-job', confirm_unknown: false,
   } });
   expect(app.posts[0].key).toMatch(/^[a-f\d-]{36}$/);
   expect(app.source.status).toBe('failed');

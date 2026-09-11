@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -51,6 +51,23 @@ class Project(Timestamped, Base):
     target_words: Mapped[int] = mapped_column(Integer, default=100_000)
     daily_goal: Mapped[int] = mapped_column(Integer, default=1_500)
     status: Mapped[str] = mapped_column(String(32), default="active")
+
+
+class ProjectWritingGoals(Timestamped, Base):
+    __tablename__ = "project_writing_goals"
+    __table_args__ = (
+        CheckConstraint("revision >= 1", name="ck_writing_goals_revision"),
+        CheckConstraint(
+            "weekly_chapters >= 0 AND weekly_chapters <= 1000", name="ck_writing_goals_weekly"
+        ),
+    )
+
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    weekly_chapters: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    deadline: Mapped[date | None] = mapped_column(nullable=True)
 
 
 class ProjectPreparation(Timestamped, Base):
@@ -518,6 +535,29 @@ class GeneratedMemoryCandidate(Timestamped, Base):
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     promoted_record_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     promotion_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class ConversationThread(Timestamped, Base):
+    """Navigation and lifecycle, independent of immutable job evidence."""
+
+    __tablename__ = "conversation_threads"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    chapter_id: Mapped[str | None] = mapped_column(ForeignKey("story_nodes.id"), nullable=True)
+    title: Mapped[str] = mapped_column(String(240))
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    parent_conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    branch_from_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    inherited_job_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    creation_hash: Mapped[str] = mapped_column(String(64), default="")
+
+
+class ConversationJob(Base):
+    __tablename__ = "conversation_jobs"
+    job_id: Mapped[str] = mapped_column(ForeignKey("ai_jobs.id"), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversation_threads.id"), index=True)
 
 
 class AIJob(Timestamped, Base):
