@@ -1,0 +1,42 @@
+.prompt-optimizer { min-width: 0; color: var(--ink-950); font: 13px/1.6 var(--font-ui); }
+.prompt-optimizer-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.prompt-optimizer-actions button { min-height: 44px; padding: 8px 12px; }
+.prompt-optimizer-hint { margin: 6px 0 0; color: var(--text-secondary); overflow-wrap: anywhere; }
+.modal-backdrop:has(.prompt-optimizer-content) { padding: 16px; }
+.editor-sheet:has(.prompt-optimizer-content) { width: min(960px, 100%); max-height: calc(100dvh - 32px); background: var(--paper-50); scrollbar-width: thin; }
+.prompt-optimizer-content { display: grid; gap: 24px; min-width: 0; color: var(--ink-950); font: 14px/1.6 var(--font-ui); }
+.prompt-optimizer-content p { margin: 0; }
+.prompt-optimizer-intro, .prompt-optimizer-template p, .prompt-optimizer-field > p, .prompt-optimizer-review, .prompt-optimizer-footer small { color: var(--text-secondary); font-size: 13px; }
+.prompt-optimizer-template, .prompt-optimizer-field { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.prompt-optimizer-template { grid-template-columns: auto minmax(160px, 260px); align-items: center; column-gap: 16px; justify-content: start; }
+.prompt-optimizer-template p { grid-column: 1 / -1; }
+.prompt-optimizer-template label, .prompt-optimizer-field label { font-weight: 600; }
+.prompt-optimizer-content textarea, .prompt-optimizer-content select { width: 100%; max-width: 100%; min-width: 0; min-height: 44px; border: 1px solid var(--control-border); border-radius: 10px; padding: 10px 12px; background: var(--paper-50); color: var(--ink-950); font: inherit; }
+.prompt-optimizer-content textarea { min-height: 80px; resize: vertical; }
+.prompt-optimizer-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.prompt-optimizer-suggestions { display: flex; flex-wrap: wrap; gap: 6px; }
+.prompt-optimizer-content button { min-height: 44px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.prompt-optimizer-suggestions button { padding: 8px 10px; border-color: transparent; border-radius: 10px; background: var(--paper-100); text-align: left; font-size: 12px; line-height: 1.6; }
+.prompt-optimizer-suggestions button:hover { background: var(--surface-hover); }
+.prompt-optimizer-required { color: var(--text-secondary); font-size: 12px; }
+.prompt-optimizer-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; padding-top: 20px; border-top: 1px solid var(--line-light); }
+.prompt-optimizer-comparison section { min-width: 0; }
+.prompt-optimizer-comparison h3 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+.prompt-optimizer-comparison pre { min-height: 120px; max-height: 280px; overflow: auto; margin: 0; padding: 14px; border: 1px solid var(--line-light); border-radius: 12px; background: var(--paper-100); white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-width: thin; font: 14px/1.8 var(--font-ui); }
+.prompt-optimizer-review { display: grid; gap: 8px; overflow-wrap: anywhere; }
+.prompt-optimizer-error { color: var(--error-text); margin: 8px 0 0; }
+.prompt-optimizer-conflict { display: grid; gap: 8px; justify-items: start; }
+.prompt-optimizer-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 16px; border-top: 1px solid var(--line-light); }
+.prompt-optimizer-footer > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.prompt-optimizer-content :is(button, textarea, select, pre):focus-visible, .prompt-optimizer-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.prompt-optimizer-content button:disabled, .prompt-optimizer-actions button:disabled { cursor: not-allowed; opacity: .5; }
+@media (max-width: 640px) {
+  .editor-sheet:has(.prompt-optimizer-content) { padding: 18px; border-radius: 16px; }
+  .prompt-optimizer-template, .prompt-optimizer-fields, .prompt-optimizer-comparison { grid-template-columns: minmax(0, 1fr); }
+  .prompt-optimizer-content { gap: 20px; }
+  .prompt-optimizer-footer { flex-direction: column; align-items: stretch; }
+  .prompt-optimizer-footer > div { justify-content: flex-end; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prompt-optimizer *, .editor-sheet:has(.prompt-optimizer-content), .prompt-optimizer-content * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

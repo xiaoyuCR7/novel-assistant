@@ -64,6 +64,7 @@ export function Modal({
         <header role="group" className="sheet-heading">
           <h2>{title}</h2>
           <button
+            type="button"
             className="icon-button"
             aria-label="关闭对话框"
             onClick={onClose}

@@ -72,6 +72,8 @@ export function FocusShell({
   useEffect(() => {
     function key(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        // Background navigation must not open a second dialog over an active editor.
+        if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
         e.preventDefault();
         setPanel("materials");
       }

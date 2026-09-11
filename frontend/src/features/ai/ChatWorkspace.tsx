@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { AIJob, JobSummary } from "../../lib/api";
 import { Icon } from "../../components/Icon";
 import { ContextPreview } from "./ContextPreview";
@@ -9,6 +9,8 @@ import { inputBudgetValue, MAX_INPUT_BUDGET } from './inputBudget';
 import { loadLocalDrafts, saveLocalDraft, useLocalDraft, type LocalDraft } from '../../lib/draftStore';
 import { DraftRecoveryNotice } from '../../components/LocalDraftRecovery';
 import { DiagnosticError } from '../../components/DiagnosticError';
+import { PromptOptimizer } from './PromptOptimizer';
+import { PROMPT_MAX_LENGTH } from './promptOptimizerEngine';
 
 const actions = [
   ["chat", "讨论", "一起讨论这个故事的下一步。"],
@@ -128,6 +130,8 @@ export function ChatWorkspace({
   const [message, setMessage] = useState(navigationDraft?.message ?? ''),
     [task, setTask] = useState(navigationDraft?.task ?? 'chat'),
     [error, setError] = useState<unknown>(null);
+  const inputLengthId = useId();
+  const messageTooLong = message.length > PROMPT_MAX_LENGTH;
   const recovery = useLocalDraft({ projectId, chapterId: chapterId ?? null, conversationId, title: chapterTitle,
     kind: 'chat', initialDraft: navigationDraft?.draft ?? undefined, values: { message, task }, dirty: !!message });
   const navigationState = useRef({ message, task, snapshot: recovery.snapshot, persisted: recovery.status === 'saved' });
@@ -159,7 +163,7 @@ export function ChatWorkspace({
     if (jobs.length || running) tail.current?.scrollIntoView?.({ block: "end" });
   }, [jobs.length, running]);
   async function send() {
-    if (running || disabledReason || (!hasChapter && task !== "chat")) return;
+    if (running || disabledReason || messageTooLong || (!hasChapter && task !== "chat")) return;
     setError("");
     const submitted = message;
     try {
@@ -370,7 +374,8 @@ export function ChatWorkspace({
           aria-label="给 AI 的消息"
           placeholder={task === "chat" ? "告诉 AI，你想怎么写…" : action[2]}
           value={message}
-          maxLength={16000}
+          aria-invalid={messageTooLong || undefined}
+          aria-describedby={messageTooLong ? inputLengthId : undefined}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={(e) => {
             if (
@@ -383,6 +388,16 @@ export function ChatWorkspace({
             }
           }}
         />
+        {messageTooLong && <p id={inputLengthId} role="status" className="error-note">
+          输入超过 16,000 字符，已完整保留。请缩短后再发送或应用提示词优化。
+        </p>}
+        <PromptOptimizer key={navigationScope ?? 'composer'} value={message} task={task}
+          hasChapter={hasChapter} chapterTitle={chapterTitle} disabled={running}
+          onReplace={(expected, replacement) => {
+            if (running || navigationState.current.message !== expected || replacement.length > PROMPT_MAX_LENGTH) return false;
+            setMessage(replacement);
+            return true;
+          }} />
         <footer>
           <span>
             {hasChapter
@@ -392,7 +407,7 @@ export function ChatWorkspace({
           <button
             className="send-message"
             aria-label="发送消息"
-            disabled={running || !!disabledReason || (!hasChapter && task !== "chat")}
+            disabled={running || !!disabledReason || messageTooLong || (!hasChapter && task !== "chat")}
           >
             <Icon name="arrow" size={19} />
           </button>
